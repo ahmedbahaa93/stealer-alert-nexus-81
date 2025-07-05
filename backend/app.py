@@ -1,0 +1,1495 @@
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from datetime import datetime, timedelta
+import psycopg2
+import psycopg2.extras
+import logging
+import hashlib
+from psycopg2.extras import RealDictCursor
+import os
+import sys
+
+app = Flask(__name__)
+CORS(app, origins=["*"])
+
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'database': os.getenv('DB_NAME', 'stealer_analysis'),
+    'user': os.getenv('DB_USER', 'stealer_user'),
+    'password': os.getenv('DB_PASSWORD', 'Test@2013'),
+    'port': int(os.getenv('DB_PORT', 5432))
+}
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Egyptian BIN data with bank information
+EGYPTIAN_BINS = {
+    '623078': {'scheme': 'China union pay', 'card_type': 'Debit', 'issuer': 'EGYPTIAN GULF BANK', 'country': 'EG'},
+    '594526': {'scheme': 'Maestro', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT S.A.E', 'country': 'EG'},
+    '559461': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'EMIRATES NATIONAL BANK OF DUBAI S.A.E', 'country': 'EG'},
+    '559444': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '559254': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'ABU DHABI ISLAMIC BANK', 'country': 'EG'},
+    '558712': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT', 'country': 'EG'},
+    '558711': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT', 'country': 'EG'},
+    '558710': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT', 'country': 'EG'},
+    '558708': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT', 'country': 'EG'},
+    '557666': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'EGYPTIAN BANKS CO. FOR TECHNOLOGICAL ADVANCEMENT, S.A.E.', 'country': 'EG'},
+    '557653': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'EGYPTIAN BANKS CO. FOR TECHNOLOGICAL ADVANCEMENT, S.A.E.', 'country': 'EG'},
+    '557607': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'COMMERCIAL INTERNATIONAL BANK (EGYPT) S.A.E.', 'country': 'EG'},
+    '557313': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '556633': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'BANK AUDI SAL', 'country': 'EG'},
+    '555922': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'EGYPTIAN BANKS CO. FOR TECHNOLOGICAL ADVANCEMENT, S.A.E.', 'country': 'EG'},
+    '553413': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '552921': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '552919': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '552918': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '552916': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'HSBC BANK EGYPT', 'country': 'EG'},
+    '552566': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'COMMERCIAL INTERNATIONAL BANK (EGYPT) S.A.E.', 'country': 'EG'},
+    '552425': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF KUWAIT (S.A.K.)', 'country': 'EG'},
+    '552362': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'BANK AUDI SAL', 'country': 'EG'},
+    '550506': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'COMMERCIAL INTERNATIONAL BANK (EGYPT) S.A.E.', 'country': 'EG'},
+    '550444': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'ARAB INTERNATIONAL BANK', 'country': 'EG'},
+    '550442': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'ARAB INTERNATIONAL BANK', 'country': 'EG'},
+    '550431': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'ARAB INTERNATIONAL BANK', 'country': 'EG'},
+    '550368': {'scheme': 'Mastercard', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '550228': {'scheme': 'Mastercard', 'card_type': 'Credit', 'issuer': 'UNITED BANK S.E.A.', 'country': 'EG'},
+    '498881': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '498880': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '498839': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '498835': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '498814': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '498813': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '494609': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '494608': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '494606': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '488953': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '486667': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'CITIBANK', 'country': 'EG'},
+    '486393': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANK OF ALEXANDRIA', 'country': 'EG'},
+    '486318': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'COMMERCIAL INTERNATIONAL BANK', 'country': 'EG'},
+    '484890': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL SOCIETE GENERALE BANK S.A.E.', 'country': 'EG'},
+    '484889': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'NATIONAL SOCIETE GENERALE BANK S.A.E.', 'country': 'EG'},
+    '483469': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '481355': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '479069': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'COMMERCIAL INTERNATIONAL BANK', 'country': 'EG'},
+    '479031': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '478749': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '478684': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'UNION NATIONAL BANK - EGYPT', 'country': 'EG'},
+    '474733': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB BANK PLC', 'country': 'EG'},
+    '474718': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'ARAB BANK PLC', 'country': 'EG'},
+    '473866': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL SOCIETE GENERALE BANK S.A.E.', 'country': 'EG'},
+    '473865': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL SOCIETE GENERALE BANK S.A.E.', 'country': 'EG'},
+    '473864': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL SOCIETE GENERALE BANK S.A.E.', 'country': 'EG'},
+    '472845': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '472594': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANK OF ALEXANDRIA', 'country': 'EG'},
+    '471445': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '470697': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+    '470696': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+    '470695': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+    '470694': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+    '470693': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+    '470599': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '470363': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'CREDIT AGRICOLE EGYPT S.A.E.', 'country': 'EG'},
+    '469680': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB AFRICAN INTERNATIONAL BANK', 'country': 'EG'},
+    '469580': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB BANKING CORPORATION - EGYPT', 'country': 'EG'},
+    '469579': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB BANKING CORPORATION - EGYPT', 'country': 'EG'},
+    '469578': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB BANKING CORPORATION - EGYPT', 'country': 'EG'},
+    '469361': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'CITIBANK', 'country': 'EG'},
+    '467738': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'ALWATANY BANK OF EGYPT', 'country': 'EG'},
+    '465727': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB INTERNATIONAL BANK', 'country': 'EG'},
+    '465566': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '464619': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'BANQUE MISR', 'country': 'EG'},
+    '464481': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'EGYPTIAN GULF BANK', 'country': 'EG'},
+    '464480': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'EGYPTIAN GULF BANK', 'country': 'EG'},
+    '460014': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'ARAB AFRICAN INTERNATIONAL BANK', 'country': 'EG'},
+    '458834': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'HSBC BANK - EGYPT SAE', 'country': 'EG'},
+    '458832': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'HSBC BANK - EGYPT SAE', 'country': 'EG'},
+    '458830': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'HSBC BANK - EGYPT SAE', 'country': 'EG'},
+    '458783': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'ARAB AFRICAN INTERNATIONAL BANK', 'country': 'EG'},
+    '458245': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '458244': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '458243': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'CITIBANK, N.A.', 'country': 'EG'},
+    '457872': {'scheme': 'Visa', 'card_type': 'Credit', 'issuer': 'UNION NATIONAL BANK - EGYPT', 'country': 'EG'},
+    '457871': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'UNION NATIONAL BANK - EGYPT', 'country': 'EG'},
+    '457638': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'CREDIT AGRICOLE EGYPT S.A.E.', 'country': 'EG'},
+    '457376': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
+    '457338': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
+}
+
+def test_connection():
+    """Test database connection"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        print("✓ Database connection successful")
+        cursor = conn.cursor()
+        cursor.execute("SELECT version();")
+        version = cursor.fetchone()
+        print(f"✓ PostgreSQL version: {version[0]}")
+        conn.close()
+        return True
+    except psycopg2.Error as e:
+        print(f"✗ Database connection failed: {e}")
+        return False
+
+def check_existing_tables():
+    """Check which tables already exist"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public'
+            ORDER BY table_name;
+        """)
+        
+        existing_tables = [row[0] for row in cursor.fetchall()]
+        print("Existing tables:")
+        for table in existing_tables:
+            print(f"  ✓ {table}")
+        
+        conn.close()
+        return existing_tables
+        
+    except psycopg2.Error as e:
+        print(f"Error checking tables: {e}")
+        return []
+
+def create_missing_tables():
+    """Create only the missing tables needed for the Flask app"""
+    print("\nCreating missing tables for Flask app...")
+    
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        existing_tables = check_existing_tables()
+        
+        # Create users table if it doesn't exist
+        if 'users' not in existing_tables:
+            print("Creating users table...")
+            cursor.execute('''
+                CREATE TABLE users (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(50) UNIQUE NOT NULL,
+                    email VARCHAR(100) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    role VARCHAR(20) DEFAULT 'user',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    api_key VARCHAR(255),
+                    last_login TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ users table created")
+        else:
+            print("✓ users table already exists")
+        
+        # Create watchlist table if it doesn't exist
+        if 'watchlist' not in existing_tables:
+            print("Creating watchlist table...")
+            cursor.execute('''
+                CREATE TABLE watchlist (
+                    id SERIAL PRIMARY KEY,
+                    keyword VARCHAR(255) NOT NULL,
+                    field_type VARCHAR(50) NOT NULL,
+                    severity VARCHAR(20) DEFAULT 'medium',
+                    description TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_by INTEGER REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ watchlist table created")
+        else:
+            print("✓ watchlist table already exists")
+        
+        # Create alerts table if it doesn't exist
+        if 'alerts' not in existing_tables:
+            print("Creating alerts table...")
+            cursor.execute('''
+                CREATE TABLE alerts (
+                    id SERIAL PRIMARY KEY,
+                    watchlist_id INTEGER REFERENCES watchlist(id) ON DELETE CASCADE,
+                    matched_field VARCHAR(50) NOT NULL,
+                    matched_value TEXT NOT NULL,
+                    record_type VARCHAR(20) NOT NULL,
+                    record_id INTEGER NOT NULL,
+                    severity VARCHAR(20) DEFAULT 'medium',
+                    status VARCHAR(20) DEFAULT 'new',
+                    reviewed_by INTEGER REFERENCES users(id),
+                    reviewed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ alerts table created")
+        else:
+            print("✓ alerts table already exists")
+
+        # Create card_watchlist table for BIN monitoring
+        if 'card_watchlist' not in existing_tables:
+            print("Creating card_watchlist table...")
+            cursor.execute('''
+                CREATE TABLE card_watchlist (
+                    id SERIAL PRIMARY KEY,
+                    bin_number VARCHAR(6) NOT NULL,
+                    bank_name VARCHAR(255),
+                    country VARCHAR(2) DEFAULT 'EG',
+                    severity VARCHAR(20) DEFAULT 'medium',
+                    description TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_by INTEGER REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ card_watchlist table created")
+        else:
+            print("✓ card_watchlist table already exists")
+
+        # Create card_alerts table for BIN-based alerts
+        if 'card_alerts' not in existing_tables:
+            print("Creating card_alerts table...")
+            cursor.execute('''
+                CREATE TABLE card_alerts (
+                    id SERIAL PRIMARY KEY,
+                    card_watchlist_id INTEGER REFERENCES card_watchlist(id) ON DELETE CASCADE,
+                    matched_bin VARCHAR(6) NOT NULL,
+                    card_number VARCHAR(255) NOT NULL,
+                    card_id INTEGER NOT NULL,
+                    bank_name VARCHAR(255),
+                    severity VARCHAR(20) DEFAULT 'medium',
+                    status VARCHAR(20) DEFAULT 'new',
+                    reviewed_by INTEGER REFERENCES users(id),
+                    reviewed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ card_alerts table created")
+        else:
+            print("✓ card_alerts table already exists")
+        
+        conn.commit()
+        print("✓ All missing tables committed to database")
+        
+        # Create indexes for new tables
+        print("Creating indexes...")
+        indexes = [
+            'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
+            'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)',
+            'CREATE INDEX IF NOT EXISTS idx_watchlist_keyword ON watchlist(keyword)',
+            'CREATE INDEX IF NOT EXISTS idx_watchlist_field_type ON watchlist(field_type)',
+            'CREATE INDEX IF NOT EXISTS idx_watchlist_active ON watchlist(is_active)',
+            'CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)',
+            'CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)',
+            'CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at)',
+            'CREATE INDEX IF NOT EXISTS idx_card_watchlist_bin ON card_watchlist(bin_number)',
+            'CREATE INDEX IF NOT EXISTS idx_card_watchlist_active ON card_watchlist(is_active)',
+            'CREATE INDEX IF NOT EXISTS idx_card_alerts_status ON card_alerts(status)',
+            'CREATE INDEX IF NOT EXISTS idx_card_alerts_bin ON card_alerts(matched_bin)',
+        ]
+        
+        for i, index_sql in enumerate(indexes):
+            try:
+                cursor.execute(index_sql)
+                print(f"✓ Index {i+1}/{len(indexes)} created")
+            except psycopg2.Error as e:
+                print(f"⚠ Warning: Index {i+1} creation failed: {e}")
+        
+        conn.commit()
+        print("✓ All indexes created")
+        
+        # Check if admin user exists, if not create it
+        cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
+        admin_count = cursor.fetchone()[0]
+        
+        if admin_count == 0:
+            print("Creating default admin user...")
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, role, api_key)
+                VALUES ('admin', 'admin@company.com', %s, 'admin', 'api-key-123')
+            ''', [hashlib.sha256('Test@2013'.encode()).hexdigest()])
+            print("✓ Default admin user created")
+        else:
+            print("✓ Admin user already exists")
+        
+        # Insert some default watchlist items if table is empty
+        cursor.execute("SELECT COUNT(*) FROM watchlist")
+        watchlist_count = cursor.fetchone()[0]
+        
+        if watchlist_count == 0:
+            print("Creating default watchlist items...")
+            cursor.execute("SELECT id FROM users WHERE username = 'admin'")
+            admin_id = cursor.fetchone()[0]
+            
+            default_watchlist = [
+                ('gmail.com', 'domain', 'high', 'Monitor Gmail credentials'),
+                ('admin', 'username', 'critical', 'Monitor admin accounts'),
+                ('192.168.', 'ip', 'medium', 'Monitor local network IPs'),
+                ('company.com', 'domain', 'high', 'Monitor company domain'),
+                ('bank', 'domain', 'critical', 'Monitor banking domains'),
+                ('yahoo.com', 'domain', 'medium', 'Monitor Yahoo credentials'),
+                ('outlook.com', 'domain', 'medium', 'Monitor Outlook credentials'),
+                ('root', 'username', 'critical', 'Monitor root accounts'),
+                ('paypal', 'domain', 'critical', 'Monitor PayPal credentials')
+            ]
+            
+            for keyword, field_type, severity, description in default_watchlist:
+                cursor.execute('''
+                    INSERT INTO watchlist (keyword, field_type, severity, description, created_by)
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', [keyword, field_type, severity, description, admin_id])
+            
+            print("✓ Default watchlist items created")
+        else:
+            print("✓ Watchlist items already exist")
+
+        # Insert Egyptian BIN watchlist items
+        cursor.execute("SELECT COUNT(*) FROM card_watchlist")
+        card_watchlist_count = cursor.fetchone()[0]
+        
+        if card_watchlist_count == 0:
+            print("Creating Egyptian BIN watchlist items...")
+            cursor.execute("SELECT id FROM users WHERE username = 'admin'")
+            admin_id = cursor.fetchone()[0]
+            
+            for bin_number, bin_info in EGYPTIAN_BINS.items():
+                cursor.execute('''
+                    INSERT INTO card_watchlist (bin_number, bank_name, country, severity, description, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', [bin_number, bin_info['issuer'], bin_info['country'], 'high', 
+                     f"Monitor {bin_info['issuer']} {bin_info['card_type']} cards", admin_id])
+            
+            print(f"✓ {len(EGYPTIAN_BINS)} Egyptian BIN watchlist items created")
+        else:
+            print("✓ Card watchlist items already exist")
+        
+        conn.commit()
+        print("✓ All default data created")
+        
+        conn.close()
+        return True
+        
+    except psycopg2.Error as e:
+        print(f"✗ Database error: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False
+    except Exception as e:
+        print(f"✗ Unexpected error: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False
+
+def verify_tables():
+    """Verify all required tables exist and have data"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        required_tables = ['users', 'watchlist', 'alerts', 'credentials', 'system_info', 'cards', 'card_watchlist', 'card_alerts']
+        
+        print("\nVerifying tables:")
+        for table in required_tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = cursor.fetchone()[0]
+                print(f"✓ {table}: {count} records")
+            except psycopg2.Error as e:
+                print(f"✗ {table}: Error - {e}")
+        
+        conn.close()
+        return True
+        
+    except Exception as e:
+        print(f"Error verifying tables: {e}")
+        return False
+
+def get_db_connection():
+    """Get database connection with error handling"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except psycopg2.Error as e:
+        logger.error(f"Database connection error: {e}")
+        return None
+
+def execute_query(query, params=None, fetch=True):
+    """Execute database query with error handling"""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(query, params)
+        
+        if fetch:
+            result = cursor.fetchall()
+            # Convert RealDictRow objects to regular dicts
+            result = [dict(row) for row in result]
+        else:
+            result = cursor.rowcount
+            
+        conn.commit()
+        return result
+    except psycopg2.Error as e:
+        logger.error(f"Database query error: {e}")
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+def get_bin_info(card_number):
+    """Get BIN information for a card number"""
+    if not card_number or len(card_number) < 6:
+        return None
+    
+    bin_number = card_number[:6]
+    return EGYPTIAN_BINS.get(bin_number)
+
+def check_card_watchlist_matches():
+    """Check for card BIN matches in Egyptian watchlist"""
+    try:
+        logger.info("Starting card watchlist matching check...")
+        
+        # Get active card watchlist items
+        watchlist_query = "SELECT * FROM card_watchlist WHERE is_active = TRUE"
+        watchlist_items = execute_query(watchlist_query)
+        
+        if not watchlist_items:
+            logger.info("No active card watchlist items found")
+            return
+        
+        alerts_created = 0
+        
+        for item in watchlist_items:
+            bin_number = item['bin_number']
+            
+            logger.info(f"Checking card watchlist item: {bin_number} ({item['bank_name']})")
+            
+            # Check cards table for matching BIN
+            check_query = """
+                SELECT id, number as card_number, cardholder, created_at, card_type, expiry
+                FROM cards 
+                WHERE LEFT(number, 6) = %s 
+                AND id NOT IN (
+                    SELECT card_id FROM card_alerts 
+                    WHERE card_watchlist_id = %s
+                )
+                LIMIT 50
+            """
+            matches = execute_query(check_query, [bin_number, item['id']])
+            
+            # Create alerts for matches
+            if matches:
+                logger.info(f"Found {len(matches)} card matches for BIN {bin_number}")
+                for match in matches:
+                    try:
+                        alert_query = """
+                            INSERT INTO card_alerts (card_watchlist_id, matched_bin, card_number, 
+                                                   card_id, bank_name, severity, status)
+                            VALUES (%s, %s, %s, %s, %s, %s, 'new')
+                        """
+                        execute_query(alert_query, [
+                            item['id'], 
+                            bin_number, 
+                            match['card_number'],
+                            match['id'],
+                            item['bank_name'],
+                            item['severity']
+                        ], fetch=False)
+                        alerts_created += 1
+                    except Exception as e:
+                        logger.error(f"Error creating card alert for match {match['id']}: {e}")
+            else:
+                logger.info(f"No new card matches found for BIN {bin_number}")
+        
+        logger.info(f"Card watchlist check completed. Created {alerts_created} new card alerts")
+        
+    except Exception as e:
+        logger.error(f"Error in card watchlist matching: {e}")
+
+def check_watchlist_matches():
+    """Enhanced watchlist matching with better coverage"""
+    try:
+        logger.info("Starting watchlist matching check...")
+        
+        # Get active watchlist items
+        watchlist_query = "SELECT * FROM watchlist WHERE is_active = TRUE"
+        watchlist_items = execute_query(watchlist_query)
+        
+        if not watchlist_items:
+            logger.info("No active watchlist items found")
+            return
+        
+        alerts_created = 0
+        
+        for item in watchlist_items:
+            keyword = item['keyword'].lower()
+            field_type = item['field_type']
+            
+            logger.info(f"Checking watchlist item: {keyword} ({field_type})")
+            
+            # Check credentials table based on field type
+            if field_type == 'domain':
+                check_query = """
+                    SELECT id, domain as matched_value, url, username, created_at 
+                    FROM credentials 
+                    WHERE LOWER(domain) LIKE %s 
+                    AND id NOT IN (
+                        SELECT record_id FROM alerts 
+                        WHERE record_type = 'credential' AND watchlist_id = %s
+                    )
+                    LIMIT 50
+                """
+                matches = execute_query(check_query, [f'%{keyword}%', item['id']])
+                
+            elif field_type == 'username':
+                check_query = """
+                    SELECT id, username as matched_value, domain, url, created_at 
+                    FROM credentials 
+                    WHERE LOWER(username) LIKE %s 
+                    AND id NOT IN (
+                        SELECT record_id FROM alerts 
+                        WHERE record_type = 'credential' AND watchlist_id = %s
+                    )
+                    LIMIT 50
+                """
+                matches = execute_query(check_query, [f'%{keyword}%', item['id']])
+                
+            elif field_type == 'ip':
+                check_query = """
+                    SELECT id, CAST(ip AS TEXT) as matched_value, domain, username, created_at 
+                    FROM credentials 
+                    WHERE CAST(ip AS TEXT) LIKE %s 
+                    AND id NOT IN (
+                        SELECT record_id FROM alerts 
+                        WHERE record_type = 'credential' AND watchlist_id = %s
+                    )
+                    LIMIT 50
+                """
+                matches = execute_query(check_query, [f'%{keyword}%', item['id']])
+                
+            elif field_type == 'url':
+                check_query = """
+                    SELECT id, url as matched_value, domain, username, created_at 
+                    FROM credentials 
+                    WHERE LOWER(url) LIKE %s 
+                    AND id NOT IN (
+                        SELECT record_id FROM alerts 
+                        WHERE record_type = 'credential' AND watchlist_id = %s
+                    )
+                    LIMIT 50
+                """
+                matches = execute_query(check_query, [f'%{keyword}%', item['id']])
+                
+            else:
+                logger.warning(f"Unknown field type: {field_type}")
+                continue
+            
+            # Create alerts for matches
+            if matches:
+                logger.info(f"Found {len(matches)} matches for {keyword}")
+                for match in matches:
+                    try:
+                        alert_query = """
+                            INSERT INTO alerts (watchlist_id, matched_field, matched_value, 
+                                              record_type, record_id, severity, status)
+                            VALUES (%s, %s, %s, 'credential', %s, %s, 'new')
+                        """
+                        execute_query(alert_query, [
+                            item['id'], 
+                            field_type, 
+                            match['matched_value'],
+                            match['id'],
+                            item['severity']
+                        ], fetch=False)
+                        alerts_created += 1
+                    except Exception as e:
+                        logger.error(f"Error creating alert for match {match['id']}: {e}")
+            else:
+                logger.info(f"No new matches found for {keyword}")
+        
+        logger.info(f"Watchlist check completed. Created {alerts_created} new alerts")
+        
+    except Exception as e:
+        logger.error(f"Error in watchlist matching: {e}")
+
+# ... keep existing code (auth/login endpoint)
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Authentication with database verification"""
+    data = request.get_json()
+    username = data.get('username', '')
+    password = data.get('password', '')
+    
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    # Check user in database
+    query = "SELECT * FROM users WHERE username = %s AND is_active = TRUE"
+    user_result = execute_query(query, [username])
+    
+    if user_result:
+        user = user_result[0]
+        # Hash the provided password and compare
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        if user['password_hash'] == password_hash:
+            # Update last login
+            update_query = "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = %s"
+            execute_query(update_query, [user['id']], fetch=False)
+            
+            # Remove sensitive data
+            user_data = {
+                'id': user['id'],
+                'username': user['username'],
+                'email': user['email'],
+                'role': user['role'],
+                'is_active': user['is_active'],
+                'api_key': user['api_key'],
+                'created_at': user['created_at'].isoformat() if user['created_at'] else None
+            }
+            
+            return jsonify({
+                'access_token': f'jwt-token-{user["id"]}-{datetime.now().timestamp()}',
+                'token_type': 'bearer',
+                'user': user_data
+            })
+    
+    return jsonify({'error': 'Invalid credentials'}), 401
+
+@app.route('/api/stats/overview')
+def get_stats():
+    """Get overview statistics from database"""
+    try:
+        # Get total credentials
+        cred_result = execute_query("SELECT COUNT(*) as count FROM credentials")
+        total_credentials = cred_result[0]['count'] if cred_result else 0
+        
+        # Get total cards
+        card_result = execute_query("SELECT COUNT(*) as count FROM cards")
+        total_cards = card_result[0]['count'] if card_result else 0
+        
+        # Get total systems
+        system_result = execute_query("SELECT COUNT(*) as count FROM system_info")
+        total_systems = system_result[0]['count'] if system_result else 0
+        
+        # For alerts, get actual count from alerts table
+        alert_result = execute_query("SELECT COUNT(*) as count FROM alerts WHERE status = 'new'")
+        total_alerts = alert_result[0]['count'] if alert_result else 0
+        
+        return jsonify({
+            'total_credentials': total_credentials,
+            'total_cards': total_cards,
+            'total_systems': total_systems,
+            'total_alerts': total_alerts
+        })
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        return jsonify({'error': 'Failed to fetch statistics'}), 500
+
+@app.route('/api/cards/search')
+def search_cards():
+    """Search cards with filters"""
+    try:
+        # Get query parameters for filtering
+        cardholder = request.args.get('cardholder')
+        card_type = request.args.get('card_type')
+        bin_number = request.args.get('bin_number')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        limit = int(request.args.get('limit', 1000))
+        offset = int(request.args.get('offset', 0))
+        
+        # Build query with filters
+        where_conditions = []
+        params = []
+        
+        if cardholder:
+            where_conditions.append("LOWER(cardholder) LIKE %s")
+            params.append(f'%{cardholder.lower()}%')
+        
+        if card_type:
+            where_conditions.append("LOWER(card_type) = %s")
+            params.append(card_type.lower())
+        
+        if bin_number:
+            where_conditions.append("LEFT(number, 6) = %s")
+            params.append(bin_number)
+        
+        if date_from:
+            where_conditions.append("created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        query = f"""
+            SELECT c.*, s.country, s.stealer_type, s.machine_user, s.ip
+            FROM cards c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {where_clause}
+            ORDER BY c.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([limit, offset])
+        result = execute_query(query, params)
+        
+        # Add BIN information to each card
+        if result:
+            for card in result:
+                bin_info = get_bin_info(card['number'])
+                if bin_info:
+                    card['bin_info'] = bin_info
+                    card['egyptian_bank'] = bin_info['issuer']
+                    card['scheme'] = bin_info['scheme']
+                    card['is_egyptian'] = bin_info['country'] == 'EG'
+                else:
+                    card['bin_info'] = None
+                    card['egyptian_bank'] = None
+                    card['scheme'] = 'Unknown'
+                    card['is_egyptian'] = False
+                
+                # Convert datetime objects to ISO strings
+                for key, value in card.items():
+                    if isinstance(value, datetime):
+                        card[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error searching cards: {e}")
+        return jsonify({'error': 'Failed to search cards'}), 500
+
+@app.route('/api/card/<int:card_id>')
+def get_card_detail(card_id):
+    """Get detailed card information"""
+    try:
+        # Get card details
+        card_query = """
+            SELECT c.*, s.country, s.stealer_type, s.machine_user, s.ip, s.computer_name,
+                   s.os_version, s.hwid, s.language, s.cpu_name, s.ram_size
+            FROM cards c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE c.id = %s
+        """
+        card_result = execute_query(card_query, [card_id])
+        
+        if not card_result:
+            return jsonify({'error': 'Card not found'}), 404
+        
+        card = card_result[0]
+        
+        # Add BIN information
+        bin_info = get_bin_info(card['number'])
+        if bin_info:
+            card['bin_info'] = bin_info
+            card['egyptian_bank'] = bin_info['issuer']
+            card['scheme'] = bin_info['scheme']
+            card['is_egyptian'] = bin_info['country'] == 'EG'
+        else:
+            card['bin_info'] = None
+            card['egyptian_bank'] = None
+            card['scheme'] = 'Unknown'
+            card['is_egyptian'] = False
+        
+        # Get related cards from same system
+        related_cards_query = """
+            SELECT * FROM cards 
+            WHERE system_info_id = %s AND id != %s
+            LIMIT 10
+        """
+        related_cards = execute_query(related_cards_query, [card['system_info_id'], card_id])
+        
+        # Get related credentials from same system
+        related_credentials_query = """
+            SELECT * FROM credentials 
+            WHERE system_info_id = %s
+            LIMIT 10
+        """
+        related_credentials = execute_query(related_credentials_query, [card['system_info_id']])
+        
+        # Convert datetime objects to ISO strings
+        for item in [card] + (related_cards or []) + (related_credentials or []):
+            if item:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        return jsonify({
+            'card': card,
+            'related_cards': related_cards or [],
+            'related_credentials': related_credentials or []
+        })
+    except Exception as e:
+        logger.error(f"Error getting card detail: {e}")
+        return jsonify({'error': 'Failed to fetch card details'}), 500
+
+@app.route('/api/cards/stats')
+def get_card_stats():
+    """Get card statistics for dashboard"""
+    try:
+        # Get BIN distribution for Egyptian banks
+        bin_stats_query = """
+            SELECT LEFT(number, 6) as bin_number, COUNT(*) as count
+            FROM cards
+            WHERE LEFT(number, 6) IN %s
+            GROUP BY LEFT(number, 6)
+            ORDER BY count DESC
+        """
+        egyptian_bins = tuple(EGYPTIAN_BINS.keys())
+        bin_stats = execute_query(bin_stats_query, [egyptian_bins])
+        
+        # Add bank information to BIN stats
+        bin_data = []
+        if bin_stats:
+            for stat in bin_stats:
+                bin_info = EGYPTIAN_BINS.get(stat['bin_number'], {})
+                bin_data.append({
+                    'bin_number': stat['bin_number'],
+                    'count': stat['count'],
+                    'bank_name': bin_info.get('issuer', 'Unknown'),
+                    'scheme': bin_info.get('scheme', 'Unknown'),
+                    'card_type': bin_info.get('card_type', 'Unknown')
+                })
+        
+        # Get card type distribution
+        card_type_query = """
+            SELECT card_type, COUNT(*) as count
+            FROM cards
+            WHERE card_type IS NOT NULL
+            GROUP BY card_type
+            ORDER BY count DESC
+        """
+        card_type_stats = execute_query(card_type_query)
+        
+        # Get timeline data for last 30 days
+        timeline_query = """
+            SELECT DATE(created_at) as date, COUNT(*) as count
+            FROM cards
+            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+        """
+        timeline_stats = execute_query(timeline_query)
+        
+        # Convert dates to ISO strings
+        if timeline_stats:
+            for stat in timeline_stats:
+                stat['date'] = stat['date'].isoformat()
+        
+        # Get top Egyptian banks by card count
+        bank_stats = {}
+        for bin_number, bin_info in EGYPTIAN_BINS.items():
+            bank_name = bin_info['issuer']
+            if bank_name not in bank_stats:
+                bank_stats[bank_name] = {'count': 0, 'bins': []}
+            
+            # Find count for this BIN
+            bin_count = next((stat['count'] for stat in bin_stats if stat['bin_number'] == bin_number), 0)
+            bank_stats[bank_name]['count'] += bin_count
+            if bin_count > 0:
+                bank_stats[bank_name]['bins'].append(bin_number)
+        
+        # Convert bank stats to list
+        bank_data = []
+        for bank_name, stats in bank_stats.items():
+            if stats['count'] > 0:
+                bank_data.append({
+                    'bank_name': bank_name,
+                    'count': stats['count'],
+                    'bins': stats['bins']
+                })
+        
+        bank_data.sort(key=lambda x: x['count'], reverse=True)
+        
+        return jsonify({
+            'bin_stats': bin_data,
+            'card_type_stats': card_type_stats or [],
+            'timeline_stats': timeline_stats or [],
+            'bank_stats': bank_data
+        })
+    except Exception as e:
+        logger.error(f"Error getting card stats: {e}")
+        return jsonify({'error': 'Failed to fetch card statistics'}), 500
+
+@app.route('/api/card-alerts')
+def get_card_alerts():
+    """Get card alerts from database"""
+    try:
+        # Get query parameters for filtering
+        status_filter = request.args.get('status')
+        severity_filter = request.args.get('severity')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        # Check for new card matches before returning alerts
+        check_card_watchlist_matches()
+        
+        # Build query with filters
+        where_conditions = []
+        params = []
+        
+        if status_filter:
+            where_conditions.append("ca.status = %s")
+            params.append(status_filter)
+        
+        if severity_filter:
+            where_conditions.append("ca.severity = %s")
+            params.append(severity_filter)
+        
+        if date_from:
+            where_conditions.append("ca.created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("ca.created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        query = f"""
+            SELECT 
+                ca.id, ca.card_watchlist_id, ca.matched_bin, ca.card_number,
+                ca.card_id, ca.bank_name, ca.severity, ca.status,
+                ca.reviewed_by, ca.reviewed_at, ca.created_at,
+                cw.bin_number, cw.description,
+                u.username as reviewed_by_username
+            FROM card_alerts ca
+            LEFT JOIN card_watchlist cw ON ca.card_watchlist_id = cw.id
+            LEFT JOIN users u ON ca.reviewed_by = u.id
+            {where_clause}
+            ORDER BY ca.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([limit, offset])
+        result = execute_query(query, params)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for alert in result:
+                for key, value in alert.items():
+                    if isinstance(value, datetime):
+                        alert[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting card alerts: {e}")
+        return jsonify({'error': 'Failed to fetch card alerts'}), 500
+
+@app.route('/api/card-alerts/<int:alert_id>/resolve', methods=['POST'])
+def resolve_card_alert(alert_id):
+    """Resolve a card alert"""
+    try:
+        data = request.get_json() or {}
+        user_id = data.get('user_id', 1)
+        
+        query = """
+            UPDATE card_alerts 
+            SET status = 'reviewed', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP 
+            WHERE id = %s
+        """
+        result = execute_query(query, [user_id, alert_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'Card alert resolved successfully'})
+        else:
+            return jsonify({'error': 'Card alert not found'}), 404
+    except Exception as e:
+        logger.error(f"Error resolving card alert: {e}")
+        return jsonify({'error': 'Failed to resolve card alert'}), 500
+
+@app.route('/api/card-alerts/<int:alert_id>/false-positive', methods=['POST'])
+def mark_card_alert_false_positive(alert_id):
+    """Mark a card alert as false positive"""
+    try:
+        data = request.get_json() or {}
+        user_id = data.get('user_id', 1)
+        
+        query = """
+            UPDATE card_alerts 
+            SET status = 'false_positive', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP 
+            WHERE id = %s
+        """
+        result = execute_query(query, [user_id, alert_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'Card alert marked as false positive'})
+        else:
+            return jsonify({'error': 'Card alert not found'}), 404
+    except Exception as e:
+        logger.error(f"Error marking card alert as false positive: {e}")
+        return jsonify({'error': 'Failed to mark card alert as false positive'}), 500
+
+# ... keep existing code (remaining endpoints)
+
+@app.route('/api/alerts')
+def get_alerts():
+    """Get alerts from database with enhanced filtering"""
+    try:
+        # Get query parameters for filtering
+        status_filter = request.args.get('status')
+        severity_filter = request.args.get('severity')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        # Check for new matches before returning alerts
+        check_watchlist_matches()
+        
+        # Build query with filters
+        where_conditions = []
+        params = []
+        
+        if status_filter:
+            where_conditions.append("a.status = %s")
+            params.append(status_filter)
+        
+        if severity_filter:
+            where_conditions.append("a.severity = %s")
+            params.append(severity_filter)
+        
+        if date_from:
+            where_conditions.append("a.created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("a.created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        query = f"""
+            SELECT 
+                a.id, a.watchlist_id, a.matched_field, a.matched_value,
+                a.record_type, a.record_id, a.severity, a.status,
+                a.reviewed_by, a.reviewed_at, a.created_at,
+                w.keyword, w.description, w.field_type,
+                u.username as reviewed_by_username
+            FROM alerts a
+            LEFT JOIN watchlist w ON a.watchlist_id = w.id
+            LEFT JOIN users u ON a.reviewed_by = u.id
+            {where_clause}
+            ORDER BY a.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([limit, offset])
+        result = execute_query(query, params)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for alert in result:
+                for key, value in alert.items():
+                    if isinstance(value, datetime):
+                        alert[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting alerts: {e}")
+        return jsonify({'error': 'Failed to fetch alerts'}), 500
+
+@app.route('/api/alerts/<int:alert_id>/resolve', methods=['POST'])
+def resolve_alert(alert_id):
+    """Resolve an alert"""
+    try:
+        data = request.get_json() or {}
+        user_id = data.get('user_id', 1)
+        
+        query = """
+            UPDATE alerts 
+            SET status = 'reviewed', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP 
+            WHERE id = %s
+        """
+        result = execute_query(query, [user_id, alert_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'Alert resolved successfully'})
+        else:
+            return jsonify({'error': 'Alert not found'}), 404
+    except Exception as e:
+        logger.error(f"Error resolving alert: {e}")
+        return jsonify({'error': 'Failed to resolve alert'}), 500
+
+@app.route('/api/alerts/<int:alert_id>/false-positive', methods=['POST'])
+def mark_false_positive(alert_id):
+    """Mark an alert as false positive"""
+    try:
+        data = request.get_json() or {}
+        user_id = data.get('user_id', 1)
+        
+        query = """
+            UPDATE alerts 
+            SET status = 'false_positive', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP 
+            WHERE id = %s
+        """
+        result = execute_query(query, [user_id, alert_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'Alert marked as false positive'})
+        else:
+            return jsonify({'error': 'Alert not found'}), 404
+    except Exception as e:
+        logger.error(f"Error marking alert as false positive: {e}")
+        return jsonify({'error': 'Failed to mark alert as false positive'}), 500
+
+@app.route('/api/credentials/search')
+def search_credentials():
+    """Search credentials with filters"""
+    try:
+        # Get query parameters for filtering
+        domain = request.args.get('domain')
+        username = request.args.get('username')
+        stealer_type = request.args.get('stealer_type')
+        country = request.args.get('country')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        limit = int(request.args.get('limit', 1000))
+        offset = int(request.args.get('offset', 0))
+        
+        # Build query with filters
+        where_conditions = []
+        params = []
+        
+        if domain:
+            where_conditions.append("(LOWER(c.domain) LIKE %s OR LOWER(c.url) LIKE %s)")
+            params.extend([f'%{domain.lower()}%', f'%{domain.lower()}%'])
+        
+        if username:
+            where_conditions.append("LOWER(c.username) LIKE %s")
+            params.append(f'%{username.lower()}%')
+        
+        if stealer_type:
+            where_conditions.append("c.stealer_type = %s")
+            params.append(stealer_type)
+        
+        if country:
+            where_conditions.append("s.country = %s")
+            params.append(country)
+        
+        if date_from:
+            where_conditions.append("c.created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("c.created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        query = f"""
+            SELECT c.*, s.country, s.computer_name, s.os_version, s.language
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {where_clause}
+            ORDER BY c.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([limit, offset])
+        result = execute_query(query, params)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for cred in result:
+                for key, value in cred.items():
+                    if isinstance(value, datetime):
+                        cred[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error searching credentials: {e}")
+        return jsonify({'error': 'Failed to search credentials'}), 500
+
+@app.route('/api/credential/<int:credential_id>')
+def get_credential_detail(credential_id):
+    """Get detailed credential information"""
+    try:
+        # Get credential details
+        credential_query = """
+            SELECT c.*, s.country, s.stealer_type, s.machine_user, s.ip, s.computer_name,
+                   s.os_version, s.hwid, s.language, s.cpu_name, s.ram_size
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE c.id = %s
+        """
+        credential_result = execute_query(credential_query, [credential_id])
+        
+        if not credential_result:
+            return jsonify({'error': 'Credential not found'}), 404
+        
+        credential = credential_result[0]
+        
+        # Get related cards from same system
+        related_cards_query = """
+            SELECT * FROM cards 
+            WHERE system_info_id = %s
+            LIMIT 10
+        """
+        related_cards = execute_query(related_cards_query, [credential['system_info_id']])
+        
+        # Get related credentials from same system
+        related_credentials_query = """
+            SELECT * FROM credentials 
+            WHERE system_info_id = %s AND id != %s
+            LIMIT 10
+        """
+        related_credentials = execute_query(related_credentials_query, [credential['system_info_id'], credential_id])
+        
+        # Convert datetime objects to ISO strings
+        for item in [credential] + (related_cards or []) + (related_credentials or []):
+            if item:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        return jsonify({
+            'credential': credential,
+            'related_cards': related_cards or [],
+            'related_credentials': related_credentials or []
+        })
+    except Exception as e:
+        logger.error(f"Error getting credential detail: {e}")
+        return jsonify({'error': 'Failed to fetch credential details'}), 500
+
+@app.route('/api/stats/countries')
+def get_country_stats():
+    """Get country statistics"""
+    try:
+        query = """
+            SELECT s.country, COUNT(*) as count
+            FROM system_info s
+            WHERE s.country IS NOT NULL
+            GROUP BY s.country
+            ORDER BY count DESC
+            LIMIT 20
+        """
+        result = execute_query(query)
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting country stats: {e}")
+        return jsonify({'error': 'Failed to fetch country statistics'}), 500
+
+@app.route('/api/stats/stealers')
+def get_stealer_stats():
+    """Get stealer statistics"""
+    try:
+        query = """
+            SELECT stealer_type, COUNT(*) as count
+            FROM credentials
+            WHERE stealer_type IS NOT NULL
+            GROUP BY stealer_type
+            ORDER BY count DESC
+            LIMIT 20
+        """
+        result = execute_query(query)
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting stealer stats: {e}")
+        return jsonify({'error': 'Failed to fetch stealer statistics'}), 500
+
+@app.route('/api/stats/top-domains')
+def get_top_domains():
+    """Get top domains statistics"""
+    try:
+        query = """
+            SELECT 
+                COALESCE(domain, 
+                    CASE 
+                        WHEN url LIKE 'http%' THEN 
+                            SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
+                        ELSE url 
+                    END
+                ) as domain,
+                COUNT(*) as count
+            FROM credentials
+            WHERE domain IS NOT NULL OR url IS NOT NULL
+            GROUP BY domain
+            ORDER BY count DESC
+            LIMIT 50
+        """
+        result = execute_query(query)
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting top domains: {e}")
+        return jsonify({'error': 'Failed to fetch top domains'}), 500
+
+@app.route('/api/stats/timeline')
+def get_timeline_stats():
+    """Get timeline statistics"""
+    try:
+        query = """
+            SELECT DATE(created_at) as date, COUNT(*) as count
+            FROM credentials
+            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+        """
+        result = execute_query(query)
+        
+        if result:
+            # Convert dates to ISO strings
+            for stat in result:
+                stat['date'] = stat['date'].isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting timeline stats: {e}")
+        return jsonify({'error': 'Failed to fetch timeline statistics'}), 500
+
+@app.route('/api/watchlist')
+def get_watchlist():
+    """Get watchlist items"""
+    try:
+        query = """
+            SELECT w.*, u.username as created_by_username
+            FROM watchlist w
+            LEFT JOIN users u ON w.created_by = u.id
+            ORDER BY w.created_at DESC
+        """
+        result = execute_query(query)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for item in result:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting watchlist: {e}")
+        return jsonify({'error': 'Failed to fetch watchlist'}), 500
+
+@app.route('/api/watchlist', methods=['POST'])
+def create_watchlist_item():
+    """Create a new watchlist item"""
+    try:
+        data = request.get_json()
+        
+        query = """
+            INSERT INTO watchlist (keyword, field_type, severity, description, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING *
+        """
+        result = execute_query(query, [
+            data['keyword'],
+            data['field_type'],
+            data.get('severity', 'medium'),
+            data.get('description', ''),
+            data.get('created_by', 1)
+        ])
+        
+        if result:
+            item = result[0]
+            # Convert datetime objects to ISO strings
+            for key, value in item.items():
+                if isinstance(value, datetime):
+                    item[key] = value.isoformat()
+            return jsonify(item)
+        else:
+            return jsonify({'error': 'Failed to create watchlist item'}), 500
+    except Exception as e:
+        logger.error(f"Error creating watchlist item: {e}")
+        return jsonify({'error': 'Failed to create watchlist item'}), 500
+
+@app.route('/api/watchlist/<int:item_id>', methods=['DELETE'])
+def delete_watchlist_item(item_id):
+    """Delete a watchlist item"""
+    try:
+        query = "DELETE FROM watchlist WHERE id = %s"
+        result = execute_query(query, [item_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'Watchlist item deleted successfully'})
+        else:
+            return jsonify({'error': 'Watchlist item not found'}), 404
+    except Exception as e:
+        logger.error(f"Error deleting watchlist item: {e}")
+        return jsonify({'error': 'Failed to delete watchlist item'}), 500
+
+@app.route('/api/export/credentials')
+def export_credentials():
+    """Export credentials (placeholder)"""
+    return jsonify({'error': 'Export functionality not implemented'}), 501
+
+@app.route('/api/health')
+def health_check():
+    """Health check endpoint to verify database connectivity"""
+    conn = get_db_connection()
+    if conn:
+        conn.close()
+        return jsonify({'status': 'healthy', 'database': 'connected'})
+    else:
+        return jsonify({'status': 'unhealthy', 'database': 'disconnected'}), 500
+
+# Initialize database only once in main process
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    print("✓ Running in reloader main process")
+    
+    # Test connection first
+    if test_connection():
+        existing_tables = check_existing_tables()
+        
+        if create_missing_tables():
+            print("\n✓ Database setup completed successfully!")
+            verify_tables()
+        else:
+            print("\n✗ Database setup failed!")
+            sys.exit(1)
+
+if __name__ == '__main__':
+    print("Starting Flask backend server with PostgreSQL integration...")
+    print("Backend will run on http://localhost:5000")
+    print("Database configuration:")
+    print(f"  Host: {DB_CONFIG['host']}")
+    print(f"  Database: {DB_CONFIG['database']}")
+    print(f"  User: {DB_CONFIG['user']}")
+    print(f"  Port: {DB_CONFIG['port']}")
+    print("Login credentials: admin / Test@2013")
+    
+    # Test database connection on startup
+    if test_connection():
+        existing_tables = check_existing_tables()
+        
+        # Create missing tables
+        if create_missing_tables():
+            print("\n✓ Database setup completed successfully!")
+            
+            # Verify everything is working
+            verify_tables()
+            
+            print("\n🚀 Your Flask app should now work without database errors!")
+            print("Login credentials: admin / Test@2013")
+        else:
+            print("\n✗ Database setup failed!")
+    else:
+        print("✗ Database connection failed - please check your configuration")
+    
+    app.run(debug=True, port=5000, host='0.0.0.0')

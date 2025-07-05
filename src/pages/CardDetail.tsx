@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -7,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, CreditCard, Shield, AlertTriangle, MapPin, Calendar, User, Building2, Computer, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, CreditCard, Shield, AlertTriangle, MapPin, Calendar, User, Building2, Computer, Eye, EyeOff, ExternalLink } from "lucide-react";
 import { apiService } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
 
@@ -75,9 +74,9 @@ export const CardDetail = () => {
       <div className="min-h-screen bg-gray-950 p-6">
         <div className="max-w-6xl mx-auto text-center">
           <h1 className="text-2xl font-bold text-white mb-4">Card Not Found</h1>
-          <Button onClick={() => navigate('/cards')} variant="outline">
+          <Button onClick={() => navigate(-1)} variant="outline">
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Cards
+            Go Back
           </Button>
         </div>
       </div>
@@ -92,12 +91,12 @@ export const CardDetail = () => {
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
           <Button 
-            onClick={() => navigate('/cards')} 
+            onClick={() => navigate(-1)} 
             variant="outline"
             className="text-gray-300 border-gray-700 hover:bg-gray-800"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Cards
+            Back
           </Button>
           <h1 className="text-2xl font-bold text-white">Card Details</h1>
         </div>
@@ -310,6 +309,7 @@ export const CardDetail = () => {
                             onClick={() => navigate(`/card/${relatedCard.id}`)}
                             className="border-gray-700 text-gray-300 hover:text-white"
                           >
+                            <ExternalLink className="h-3 w-3 mr-1" />
                             View
                           </Button>
                         </TableCell>
@@ -354,6 +354,7 @@ export const CardDetail = () => {
                             onClick={() => navigate(`/credential/${credential.id}`)}
                             className="border-gray-700 text-gray-300 hover:text-white"
                           >
+                            <ExternalLink className="h-3 w-3 mr-1" />
                             View
                           </Button>
                         </TableCell>

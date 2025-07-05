@@ -1,28 +1,39 @@
-
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { apiService, CardAlert } from '@/services/api';
 import { toast } from '@/hooks/use-toast';
-import { CreditCard, AlertCircle, Shield, Target, Building2, Banknote } from 'lucide-react';
+import { CreditCard, AlertCircle, Shield, Target, Building2, Banknote, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const COLORS = ['#3B82F6', '#EF4444', '#F59E0B', '#10B981', '#8B5CF6', '#F97316', '#06B6D4', '#84CC16'];
 
 export const CardDashboard = () => {
   const navigate = useNavigate();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [alertsPerPage] = useState(100);
 
   const { data: cardStats, isLoading: statsLoading } = useQuery({
     queryKey: ['cardStats'],
     queryFn: () => apiService.getCardStats(),
   });
 
+  const { data: allCardAlerts, isLoading: allAlertsLoading } = useQuery({
+    queryKey: ['allCardAlerts'],
+    queryFn: () => apiService.getCardAlerts({ limit: 50000 }),
+  });
+
   const { data: cardAlerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
-    queryKey: ['cardAlerts', { limit: 20 }],
-    queryFn: () => apiService.getCardAlerts({ limit: 20 }),
+    queryKey: ['cardAlerts', { limit: alertsPerPage, offset: (currentPage - 1) * alertsPerPage }],
+    queryFn: () => apiService.getCardAlerts({ 
+      limit: alertsPerPage, 
+      offset: (currentPage - 1) * alertsPerPage 
+    }),
   });
 
   const handleResolveCardAlert = async (alertId: number) => {
@@ -89,6 +100,17 @@ export const CardDashboard = () => {
     return null;
   };
 
+  // Pagination calculations
+  const totalAlerts = allCardAlerts?.length || 0;
+  const totalPages = Math.ceil(totalAlerts / alertsPerPage);
+  const hasNextPage = currentPage < totalPages;
+  const hasPrevPage = currentPage > 1;
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   if (statsLoading) {
     return (
       <div className="min-h-screen bg-gray-950 p-6">
@@ -114,6 +136,16 @@ export const CardDashboard = () => {
     <div className="min-h-screen bg-gray-950 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="mb-8">
+          <div className="flex items-center gap-4 mb-4">
+            <Button
+              variant="outline"
+              onClick={() => navigate(-1)}
+              className="bg-gray-800 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-700"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back
+            </Button>
+          </div>
           <h1 className="text-3xl font-bold text-white mb-2 flex items-center gap-2">
             <CreditCard className="h-8 w-8 text-red-400" />
             Egyptian Credit Card Dashboard
@@ -192,7 +224,7 @@ export const CardDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-white">
-                {cardAlerts?.filter(alert => alert.status === 'new').length || 0}
+                {allCardAlerts?.filter(alert => alert.status === 'new').length || 0}
               </div>
               <p className="text-xs text-green-200">
                 New alerts pending
@@ -327,7 +359,7 @@ export const CardDashboard = () => {
           </Card>
         </div>
 
-        {/* Card Alerts Section */}
+        {/* Card Alerts Section with Pagination */}
         <Card className="bg-gray-900 border-gray-800">
           <CardHeader>
             <CardTitle className="text-white flex items-center justify-between">
@@ -336,12 +368,12 @@ export const CardDashboard = () => {
                 Recent Card Alerts
               </div>
               <Badge variant="outline" className="text-gray-300 border-gray-600">
-                {cardAlerts?.length || 0} alerts
+                {totalAlerts} total alerts
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {alertsLoading ? (
+            {alertsLoading || allAlertsLoading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500 mx-auto"></div>
                 <p className="text-gray-400 mt-2">Loading card alerts...</p>
@@ -352,81 +384,139 @@ export const CardDashboard = () => {
                 <p className="text-gray-400">No card alerts found</p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-gray-700">
-                    <TableHead className="text-gray-300">BIN</TableHead>
-                    <TableHead className="text-gray-300">Bank</TableHead>
-                    <TableHead className="text-gray-300">Card Number</TableHead>
-                    <TableHead className="text-gray-300">Severity</TableHead>
-                    <TableHead className="text-gray-300">Status</TableHead>
-                    <TableHead className="text-gray-300">Date</TableHead>
-                    <TableHead className="text-gray-300">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {cardAlerts.map((alert) => (
-                    <TableRow key={alert.id} className="border-gray-700 hover:bg-gray-800/50">
-                      <TableCell className="text-blue-400 font-mono">
-                        {alert.matched_bin}
-                      </TableCell>
-                      <TableCell className="text-white">
-                        <div className="truncate max-w-[200px]" title={alert.bank_name}>
-                          {alert.bank_name}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-gray-300 font-mono">
-                        {alert.card_number ? `${alert.card_number.slice(0, 4)}****${alert.card_number.slice(-4)}` : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={getSeverityColor(alert.severity)}>
-                          {alert.severity.toUpperCase()}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={getStatusColor(alert.status)}>
-                          {alert.status.replace('_', ' ').toUpperCase()}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-gray-300">
-                        {new Date(alert.created_at).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          {alert.status === 'new' && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleResolveCardAlert(alert.id)}
-                                className="border-gray-700 text-gray-300 hover:text-white"
-                              >
-                                Resolve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleMarkFalsePositive(alert.id)}
-                                className="border-gray-700 text-gray-300 hover:text-white"
-                              >
-                                False Positive
-                              </Button>
-                            </>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => navigate(`/card/${alert.card_id}`)}
-                            className="border-gray-700 text-gray-300 hover:text-white"
-                          >
-                            View Card
-                          </Button>
-                        </div>
-                      </TableCell>
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-gray-700">
+                      <TableHead className="text-gray-300">BIN</TableHead>
+                      <TableHead className="text-gray-300">Bank</TableHead>
+                      <TableHead className="text-gray-300">Card Number</TableHead>
+                      <TableHead className="text-gray-300">Severity</TableHead>
+                      <TableHead className="text-gray-300">Status</TableHead>
+                      <TableHead className="text-gray-300">Date</TableHead>
+                      <TableHead className="text-gray-300">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {cardAlerts.map((alert) => (
+                      <TableRow key={alert.id} className="border-gray-700 hover:bg-gray-800/50">
+                        <TableCell className="text-blue-400 font-mono">
+                          {alert.matched_bin}
+                        </TableCell>
+                        <TableCell className="text-white">
+                          <div className="truncate max-w-[200px]" title={alert.bank_name}>
+                            {alert.bank_name}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-gray-300 font-mono">
+                          {alert.card_number ? `${alert.card_number.slice(0, 4)}****${alert.card_number.slice(-4)}` : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={getSeverityColor(alert.severity)}>
+                            {alert.severity.toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={getStatusColor(alert.status)}>
+                            {alert.status.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-gray-300">
+                          {new Date(alert.created_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            {alert.status === 'new' && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleResolveCardAlert(alert.id)}
+                                  className="border-gray-700 text-gray-300 hover:text-white"
+                                >
+                                  Resolve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleMarkFalsePositive(alert.id)}
+                                  className="border-gray-700 text-gray-300 hover:text-white"
+                                >
+                                  False Positive
+                                </Button>
+                              </>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`/card/${alert.card_id}`)}
+                              className="border-gray-700 text-gray-300 hover:text-white"
+                            >
+                              View Card
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="mt-6 flex justify-center">
+                    <Pagination>
+                      <PaginationContent>
+                        {hasPrevPage && (
+                          <PaginationItem>
+                            <PaginationPrevious 
+                              onClick={() => handlePageChange(currentPage - 1)}
+                              className="text-gray-300 hover:text-white cursor-pointer hover:bg-gray-800"
+                            />
+                          </PaginationItem>
+                        )}
+                        
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let page;
+                          if (totalPages <= 5) {
+                            page = i + 1;
+                          } else if (currentPage <= 3) {
+                            page = i + 1;
+                          } else if (currentPage >= totalPages - 2) {
+                            page = totalPages - 4 + i;
+                          } else {
+                            page = currentPage - 2 + i;
+                          }
+                          
+                          return (
+                            <PaginationItem key={page}>
+                              <PaginationLink
+                                onClick={() => handlePageChange(page)}
+                                isActive={currentPage === page}
+                                className="text-gray-300 hover:text-white cursor-pointer hover:bg-gray-800"
+                              >
+                                {page}
+                              </PaginationLink>
+                            </PaginationItem>
+                          );
+                        })}
+
+                        {hasNextPage && (
+                          <PaginationItem>
+                            <PaginationNext 
+                              onClick={() => handlePageChange(currentPage + 1)}
+                              className="text-gray-300 hover:text-white cursor-pointer hover:bg-gray-800"
+                            />
+                          </PaginationItem>
+                        )}
+                      </PaginationContent>
+                    </Pagination>
+                  </div>
+                )}
+                
+                <div className="mt-4 text-center text-sm text-gray-400">
+                  Showing page {currentPage} of {totalPages} ({totalAlerts} total alerts)
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

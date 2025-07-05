@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
 import { apiService, Credential, SearchFilters } from '@/services/api';
 import { useNavigate } from 'react-router-dom';
-import { Search as SearchIcon, Shield, AlertTriangle, Download, Database, ArrowLeft } from 'lucide-react';
+import { Search as SearchIcon, Shield, AlertTriangle, Download, Database, ArrowLeft, X } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 
 export const Search = () => {
@@ -29,7 +29,7 @@ export const Search = () => {
       const result = await apiService.getCredentials(filters);
       // If we got less than the limit, we know this is the last page
       if (Array.isArray(result) && result.length < (filters.limit || 100)) {
-        setTotalCredentials(filters.offset + result.length);
+        setTotalCredentials((filters.offset || 0) + result.length);
       } else if (Array.isArray(result)) {
         // Estimate total for pagination display
         setTotalCredentials(Math.min(50000, (filters.offset || 0) + result.length + 1));
@@ -135,6 +135,12 @@ export const Search = () => {
     }
   };
 
+  const clearAllFilters = () => {
+    setFilters({ limit: 100, offset: 0 });
+    setSearchTerm('');
+    setCurrentPage(1);
+  };
+
   const getConfidenceColor = (score: number) => {
     if (score >= 0.8) return 'bg-green-100 text-green-800 border-green-200';
     if (score >= 0.6) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
@@ -147,7 +153,7 @@ export const Search = () => {
   
   // Calculate pagination info
   const maxPossiblePages = Math.ceil(Math.min(50000, totalCredentials) / limit);
-  const hasNextPage = safeCredentials.length === limit && currentOffset + limit < 50000;
+  const hasNextPage = safeCredentials.length === limit && currentOffset + limit < 50000 && filters.limit !== 50000;
   const hasPrevPage = currentPage > 1;
 
   const countries = countryStats?.map(c => c.country) || [];
@@ -324,13 +330,10 @@ export const Search = () => {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setFilters({ limit: 100, offset: 0 });
-                    setSearchTerm('');
-                    setCurrentPage(1);
-                  }}
-                  className="border-gray-700 text-gray-300 hover:text-white"
+                  onClick={clearAllFilters}
+                  className="border-gray-700 text-gray-300 hover:text-white flex items-center gap-2"
                 >
+                  <X className="h-4 w-4" />
                   Clear All Filters
                 </Button>
                 <Button
@@ -459,7 +462,7 @@ export const Search = () => {
                 </div>
 
                 {/* Enhanced Pagination */}
-                {(hasNextPage || hasPrevPage) && (
+                {(hasNextPage || hasPrevPage) && filters.limit !== 50000 && (
                   <div className="mt-6 flex justify-center">
                     <Pagination>
                       <PaginationContent>

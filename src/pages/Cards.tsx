@@ -10,7 +10,7 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { Checkbox } from '@/components/ui/checkbox';
 import { apiService, Card as CardType, CardSearchFilters } from '@/services/api';
 import { useNavigate } from 'react-router-dom';
-import { CreditCard, Search as SearchIcon, Building2, AlertTriangle, Target, Eye, EyeOff, ArrowLeft } from 'lucide-react';
+import { CreditCard, Search as SearchIcon, Building2, AlertTriangle, Target, Eye, EyeOff, ArrowLeft, X } from 'lucide-react';
 
 export const Cards = () => {
   const [filters, setFilters] = useState<CardSearchFilters>({
@@ -32,7 +32,7 @@ export const Cards = () => {
       const result = await apiService.getCards(filters);
       // If we got less than the limit, we know this is the last page
       if (Array.isArray(result) && result.length < (filters.limit || 100)) {
-        setTotalCards(filters.offset + result.length);
+        setTotalCards((filters.offset || 0) + result.length);
       } else if (Array.isArray(result)) {
         // Estimate total for pagination display
         setTotalCards(Math.min(50000, (filters.offset || 0) + result.length + 1));
@@ -45,6 +45,11 @@ export const Cards = () => {
   const { data: cardAlerts } = useQuery({
     queryKey: ['cardAlerts'],
     queryFn: () => apiService.getCardAlerts({ limit: 1000 }),
+  });
+
+  const { data: cardStats } = useQuery({
+    queryKey: ['cardStats'],
+    queryFn: () => apiService.getCardStats(),
   });
 
   const handleSearch = async () => {
@@ -132,6 +137,14 @@ export const Cards = () => {
     setShowOnlyAlertsCards(checked === true);
   };
 
+  const clearAllFilters = () => {
+    setFilters({ limit: 100, offset: 0 });
+    setSearchTerm('');
+    setCurrentPage(1);
+    setShowOnlyEgyptian(false);
+    setShowOnlyAlertsCards(false);
+  };
+
   // Filter cards based on checkboxes
   let filteredCards = Array.isArray(cards) ? cards : [];
   
@@ -153,6 +166,7 @@ export const Cards = () => {
   const hasPrevPage = currentPage > 1;
   
   const egyptianCards = filteredCards.filter(card => card.is_egyptian);
+  const uniqueBanks = new Set(egyptianCards.map(card => card.egyptian_bank).filter(Boolean));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 p-6 animate-fade-in">
@@ -221,7 +235,7 @@ export const Cards = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-white">
-                {new Set(egyptianCards.map(card => card.egyptian_bank).filter(Boolean)).size}
+                {uniqueBanks.size}
               </div>
               <p className="text-xs text-green-200">
                 Egyptian banks affected
@@ -304,7 +318,7 @@ export const Cards = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
               <Select onValueChange={(value) => handleFilterChange('card_type', value)}>
                 <SelectTrigger className="bg-gray-800 border-gray-700 text-white">
                   <SelectValue placeholder="Card Type" />
@@ -314,6 +328,20 @@ export const Cards = () => {
                   <SelectItem value="Credit">Credit</SelectItem>
                   <SelectItem value="Debit">Debit</SelectItem>
                   <SelectItem value="Prepaid">Prepaid</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select onValueChange={(value) => handleFilterChange('bank_name', value)}>
+                <SelectTrigger className="bg-gray-800 border-gray-700 text-white">
+                  <SelectValue placeholder="Bank Name" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700 max-h-60">
+                  <SelectItem value="all">All Banks</SelectItem>
+                  {cardStats?.bank_stats?.map(bank => (
+                    <SelectItem key={bank.bank_name} value={bank.bank_name} className="text-white">
+                      {bank.bank_name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
 
@@ -356,15 +384,10 @@ export const Cards = () => {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setFilters({ limit: 100, offset: 0 });
-                    setSearchTerm('');
-                    setCurrentPage(1);
-                    setShowOnlyEgyptian(false);
-                    setShowOnlyAlertsCards(false);
-                  }}
-                  className="border-gray-700 text-gray-300 hover:text-white"
+                  onClick={clearAllFilters}
+                  className="border-gray-700 text-gray-300 hover:text-white flex items-center gap-2"
                 >
+                  <X className="h-4 w-4" />
                   Clear All Filters
                 </Button>
                 <Button

@@ -1,16 +1,17 @@
-
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { apiService } from '@/services/api';
-import { Shield, Monitor, CreditCard, Key, Globe, Calendar } from 'lucide-react';
+import { Shield, Monitor, CreditCard, Key, Globe, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
 
 export const CredentialDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   
   const { data: credentialDetail, isLoading } = useQuery({
     queryKey: ['credential-detail', id],
@@ -35,6 +36,14 @@ export const CredentialDetail = () => {
         <div className="text-center">
           <Shield className="h-16 w-16 text-gray-600 mx-auto mb-4" />
           <h2 className="text-xl text-gray-400">Credential not found</h2>
+          <Button 
+            onClick={() => navigate(-1)} 
+            variant="outline" 
+            className="mt-4 border-gray-700 text-gray-300 hover:text-white"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Go Back
+          </Button>
         </div>
       </div>
     );
@@ -60,6 +69,16 @@ export const CredentialDetail = () => {
     <div className="min-h-screen bg-gray-950 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="border-b border-gray-800 pb-6">
+          <div className="flex items-center gap-4 mb-4">
+            <Button
+              variant="outline"
+              onClick={() => navigate(-1)}
+              className="bg-gray-800 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-700"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back
+            </Button>
+          </div>
           <h1 className="text-3xl font-bold text-white">Credential Details</h1>
           <p className="text-gray-400 mt-2">
             Comprehensive analysis of compromised credential #{credential.id}
@@ -194,6 +213,7 @@ export const CredentialDetail = () => {
                         <TableHead className="text-gray-300">Expiry</TableHead>
                         <TableHead className="text-gray-300">Type</TableHead>
                         <TableHead className="text-gray-300">Date Found</TableHead>
+                        <TableHead className="text-gray-300">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -207,6 +227,17 @@ export const CredentialDetail = () => {
                           <TableCell className="text-gray-300">{card.card_type || 'Unknown'}</TableCell>
                           <TableCell className="text-gray-300">
                             {card.log_date ? new Date(card.log_date).toLocaleDateString() : 'Unknown'}
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`/card/${card.id}`)}
+                              className="border-gray-700 text-gray-300 hover:text-white"
+                            >
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              View Details
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -233,6 +264,7 @@ export const CredentialDetail = () => {
                         <TableHead className="text-gray-300">Username</TableHead>
                         <TableHead className="text-gray-300">Risk Level</TableHead>
                         <TableHead className="text-gray-300">Date Found</TableHead>
+                        <TableHead className="text-gray-300">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -247,6 +279,17 @@ export const CredentialDetail = () => {
                           </TableCell>
                           <TableCell className="text-gray-300">
                             {cred.log_date ? new Date(cred.log_date).toLocaleDateString() : 'Unknown'}
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`/credential/${cred.id}`)}
+                              className="border-gray-700 text-gray-300 hover:text-white"
+                            >
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              View Details
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}

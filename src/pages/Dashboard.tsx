@@ -1,4 +1,3 @@
-
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { DashboardStats } from "@/components/DashboardStats";
@@ -39,9 +38,9 @@ export const Dashboard = () => {
 
   // Enhanced alert queries with country filtering
   const { data: allAlerts, isLoading: allAlertsLoading } = useQuery({
-    queryKey: ['alerts', { limit: 1000, country: selectedCountry }],
+    queryKey: ['alerts', { limit: 10000, country: selectedCountry }],
     queryFn: async () => {
-      const alerts = await apiService.getAlerts({ limit: 1000 });
+      const alerts = await apiService.getAlerts({ limit: 10000 });
       
       if (!selectedCountry) return alerts;
       
@@ -65,9 +64,9 @@ export const Dashboard = () => {
   });
 
   const { data: allCardAlerts, isLoading: allCardAlertsLoading } = useQuery({
-    queryKey: ['cardAlerts', { limit: 1000, country: selectedCountry }],
+    queryKey: ['cardAlerts', { limit: 10000, country: selectedCountry }],
     queryFn: async () => {
-      const cardAlerts = await apiService.getCardAlerts({ limit: 1000 });
+      const cardAlerts = await apiService.getCardAlerts({ limit: 10000 });
       
       if (!selectedCountry) return cardAlerts;
       
@@ -194,7 +193,7 @@ export const Dashboard = () => {
   // Fixed filtered stats calculation with proper country filtering
   const getFilteredStats = () => {
     if (!selectedCountry) {
-      // Global data - use base stats
+      // Global data - use base stats with live alert counts
       const credentialAlerts = allAlerts?.filter(alert => alert.status === 'new').length || 0;
       const cardAlerts = allCardAlerts?.filter(alert => alert.status === 'new').length || 0;
       
@@ -251,10 +250,12 @@ export const Dashboard = () => {
     }
 
     const domainCounts = filteredCredentials.reduce((acc, cred) => {
-      if (!cred.url) return acc;
+      if (!cred.url && !cred.domain) return acc;
       try {
-        const domain = new URL(cred.url).hostname;
-        acc[domain] = (acc[domain] || 0) + 1;
+        const domain = cred.domain || (cred.url ? new URL(cred.url).hostname : null);
+        if (domain) {
+          acc[domain] = (acc[domain] || 0) + 1;
+        }
       } catch (error) {
         // Skip invalid URLs
       }

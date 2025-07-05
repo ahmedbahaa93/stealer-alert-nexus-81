@@ -2,7 +2,9 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { apiService } from '@/services/api';
+import { useNavigate } from 'react-router-dom';
 import { 
   TrendingUp, 
   Eye, 
@@ -11,18 +13,21 @@ import {
   Target,
   Activity,
   BarChart3,
-  PieChart
+  PieChart,
+  ArrowLeft
 } from 'lucide-react';
 
 export const WatchlistStats = () => {
+  const navigate = useNavigate();
+
   const { data: watchlistItems, isLoading: watchlistLoading } = useQuery({
     queryKey: ['watchlist'],
     queryFn: () => apiService.getWatchlist(),
   });
 
   const { data: alerts, isLoading: alertsLoading } = useQuery({
-    queryKey: ['alerts'],
-    queryFn: () => apiService.getAlerts(),
+    queryKey: ['alerts', { limit: 10000 }],
+    queryFn: () => apiService.getAlerts({ limit: 10000 }),
   });
 
   if (watchlistLoading || alertsLoading) {
@@ -54,9 +59,6 @@ export const WatchlistStats = () => {
     return acc;
   }, {} as Record<string, number>) || {};
 
-  // Alert effectiveness (alerts per watchlist item)
-  const alertsPerItem = totalWatchlistItems > 0 ? (totalAlerts / totalWatchlistItems).toFixed(2) : '0';
-
   // Most triggered watchlist items
   const watchlistAlertCounts = alerts?.reduce((acc, alert) => {
     acc[alert.watchlist_id] = (acc[alert.watchlist_id] || 0) + 1;
@@ -85,6 +87,16 @@ export const WatchlistStats = () => {
     <div className="min-h-screen bg-gray-950 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="border-b border-gray-800 pb-6">
+          <div className="flex items-center gap-4 mb-4">
+            <Button
+              variant="outline"
+              onClick={() => navigate(-1)}
+              className="bg-gray-800 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-700"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back
+            </Button>
+          </div>
           <h1 className="text-3xl font-bold text-white">Watchlist Statistics</h1>
           <p className="text-gray-400 mt-2">
             Analytics and performance metrics for your watchlist monitoring
@@ -92,7 +104,7 @@ export const WatchlistStats = () => {
         </div>
 
         {/* Overview Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="bg-gray-900 border-gray-800">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -125,18 +137,6 @@ export const WatchlistStats = () => {
                   <p className="text-2xl font-bold text-white">{totalAlerts}</p>
                 </div>
                 <AlertTriangle className="h-8 w-8 text-yellow-500" />
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card className="bg-gray-900 border-gray-800">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-400">Alerts per Item</p>
-                  <p className="text-2xl font-bold text-white">{alertsPerItem}</p>
-                </div>
-                <Target className="h-8 w-8 text-purple-500" />
               </div>
             </CardContent>
           </Card>

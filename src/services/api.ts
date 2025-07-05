@@ -114,6 +114,18 @@ export interface Watchlist {
   created_by?: string;
 }
 
+export interface BinWatchlist {
+  id: number;
+  bin_number: string;
+  scheme: string;
+  bank_name: string;
+  country: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  is_active: boolean;
+  created_at: string;
+  created_by?: string;
+}
+
 export interface DashboardStats {
   total_credentials: number;
   total_cards: number;
@@ -167,6 +179,7 @@ export interface CardSearchFilters {
   cardholder?: string;
   card_type?: string;
   bin_number?: string;
+  bank_name?: string;
   country?: string;
   date_from?: string;
   date_to?: string;
@@ -416,6 +429,62 @@ export class ApiService {
     }
   }
 
+  async getBinWatchlist(): Promise<BinWatchlist[]> {
+    const response = await fetch(`${this.baseUrl}/bin-watchlist`, {
+      headers: this.getHeaders(),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch BIN watchlist');
+    }
+    
+    return response.json();
+  }
+
+  async createBinWatchlistItem(item: Partial<BinWatchlist>): Promise<BinWatchlist> {
+    const response = await fetch(`${this.baseUrl}/bin-watchlist`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(item),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to create BIN watchlist item');
+    }
+    
+    return response.json();
+  }
+
+  async uploadBinFile(file: File): Promise<{ message: string; count: number }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await fetch(`${this.baseUrl}/bin-watchlist/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': this.token ? `Bearer ${this.token}` : '',
+      },
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to upload BIN file');
+    }
+    
+    return response.json();
+  }
+
+  async deleteBinWatchlistItem(id: number): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/bin-watchlist/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete BIN watchlist item');
+    }
+  }
+
   async getCountryStats(): Promise<Array<{ country: string; count: number }>> {
     const response = await fetch(`${this.baseUrl}/stats/countries`, {
       headers: this.getHeaders(),
@@ -464,7 +533,7 @@ export class ApiService {
     return response.json();
   }
 
-  async exportCredentials(format: 'csv' | 'json' | 'pdf', filters?: SearchFilters): Promise<Blob> {
+  async exportCredentials(format: 'csv', filters?: SearchFilters): Promise<Blob> {
     const params = new URLSearchParams();
     params.append('format', format);
     if (filters) {
@@ -480,7 +549,8 @@ export class ApiService {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to export credentials');
+      const errorText = await response.text();
+      throw new Error(`Failed to export credentials: ${errorText}`);
     }
     
     return response.blob();

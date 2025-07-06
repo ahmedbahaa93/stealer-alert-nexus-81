@@ -1435,8 +1435,9 @@ def get_card_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Check for new card matches before returning alerts
-        check_card_watchlist_matches()
+        # Optional: Check for new card matches (only if requested)
+        if request.args.get('check_matches') == 'true':
+            check_card_watchlist_matches()
         
         # Build query with filters
         where_conditions = []
@@ -1582,8 +1583,9 @@ def get_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Check for new matches before returning alerts
-        check_watchlist_matches()
+        # Optional: Check for new matches (only if requested)
+        if request.args.get('check_matches') == 'true':
+            check_watchlist_matches()
         
         # Build query with filters
         where_conditions = []
@@ -1684,8 +1686,9 @@ def get_optimized_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Check for new matches before returning alerts
-        check_watchlist_matches()
+        # Optional: Check for new matches (only if requested)
+        if request.args.get('check_matches') == 'true':
+            check_watchlist_matches()
         
         # Build query with filters using the optimized table
         where_conditions = []
@@ -2256,6 +2259,125 @@ def delete_watchlist_item(item_id):
     except Exception as e:
         logger.error(f"Error deleting watchlist item: {e}")
         return jsonify({'error': 'Failed to delete watchlist item'}), 500
+
+@app.route('/api/watchlist/upload', methods=['POST'])
+def upload_watchlist():
+    """Upload watchlist items from file or manual input"""
+    try:
+        # Handle both file upload and manual input
+        if 'file' in request.files:
+            # File upload
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected'}), 400
+            
+            if not file.filename.endswith('.txt'):
+                return jsonify({'error': 'Only .txt files are allowed'}), 400
+            
+            # Read file content
+            content = file.read().decode('utf-8')
+            lines = content.strip().split('\n')
+            
+        else:
+            # Manual input
+            data = request.get_json()
+            if not data or 'content' not in data:
+                return jsonify({'error': 'No content provided'}), 400
+            
+            content = data['content']
+            lines = content.strip().split('\n')
+        
+        # Parse lines - expect format: keyword,field_type,severity,description
+        # Example: facebook.com,domain,high,Facebook credential monitoring
+        created_items = []
+        skipped_items = []
+        errors = []
+        
+        for i, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):  # Skip empty lines and comments
+                continue
+            
+            if i == 1 and line.lower().startswith('keyword,'):  # Skip header line
+                continue
+            
+            try:
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) < 2:
+                    errors.append(f"Line {i}: Invalid format - expected keyword,field_type[,severity,description]")
+                    continue
+                
+                keyword = parts[0]
+                field_type = parts[1]
+                severity = parts[2] if len(parts) > 2 else 'medium'
+                description = parts[3] if len(parts) > 3 else f"Monitoring for {keyword} ({field_type})"
+                
+                # Validate field type
+                valid_field_types = ['domain', 'username', 'ip', 'url']
+                if field_type not in valid_field_types:
+                    errors.append(f"Line {i}: Invalid field_type '{field_type}' - must be one of: {', '.join(valid_field_types)}")
+                    continue
+                
+                # Validate severity
+                valid_severities = ['low', 'medium', 'high', 'critical']
+                if severity not in valid_severities:
+                    errors.append(f"Line {i}: Invalid severity '{severity}' - must be one of: {', '.join(valid_severities)}")
+                    continue
+                
+                # Check if keyword already exists for this field type
+                check_query = "SELECT COUNT(*) as count FROM watchlist WHERE keyword = %s AND field_type = %s"
+                check_result = execute_query(check_query, [keyword, field_type])
+                if check_result and check_result[0]['count'] > 0:
+                    skipped_items.append(f"Keyword '{keyword}' ({field_type}) already exists in watchlist")
+                    continue
+                
+                # Create watchlist item
+                insert_query = """
+                    INSERT INTO watchlist (keyword, field_type, severity, description, created_by)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING *
+                """
+                result = execute_query(insert_query, [
+                    keyword,
+                    field_type,
+                    severity,
+                    description,
+                    1  # Default user ID
+                ])
+                
+                if result:
+                    created_items.append(result[0])
+                else:
+                    errors.append(f"Line {i}: Failed to create watchlist item for '{keyword}'")
+                    
+            except Exception as e:
+                errors.append(f"Line {i}: Error processing line - {str(e)}")
+        
+        # Convert datetime objects to ISO strings in created items
+        for item in created_items:
+            for key, value in item.items():
+                if isinstance(value, datetime):
+                    item[key] = value.isoformat()
+        
+        return jsonify({
+            'success': True,
+            'created_count': len(created_items),
+            'skipped_count': len(skipped_items),
+            'error_count': len(errors),
+            'created_items': created_items,
+            'skipped_items': skipped_items,
+            'errors': errors,
+            'format_help': {
+                'expected_format': 'keyword,field_type,severity,description',
+                'field_types': ['domain', 'username', 'ip', 'url'],
+                'severities': ['low', 'medium', 'high', 'critical'],
+                'example': 'facebook.com,domain,high,Facebook credential monitoring'
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error uploading watchlist: {e}")
+        return jsonify({'error': 'Failed to upload watchlist'}), 500
 
 @app.route('/api/watchlist/bins', methods=['GET'])
 def get_bin_watchlist():

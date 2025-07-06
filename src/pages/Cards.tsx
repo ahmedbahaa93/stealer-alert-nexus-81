@@ -14,8 +14,8 @@ import { CreditCard, Search as SearchIcon, Building2, AlertTriangle, Target, Eye
 
 export const Cards = () => {
   const [filters, setFilters] = useState<CardSearchFilters>({
-    limit: 100,
-    offset: 0,
+    per_page: 100,
+    page: 1,
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [isFiltering, setIsFiltering] = useState(false);
@@ -53,7 +53,7 @@ export const Cards = () => {
     setIsFiltering(true);
     const newFilters: CardSearchFilters = {
       ...filters,
-      offset: 0,
+      page: 1,
     };
 
     if (searchTerm.trim()) {
@@ -74,25 +74,24 @@ export const Cards = () => {
     } else {
       delete (newFilters as any)[key];
     }
-    newFilters.offset = 0;
+    newFilters.page = 1;
     setFilters(newFilters);
     setCurrentPage(1);
   };
 
   const handleLimitChange = (newLimit: string) => {
-    const limit = newLimit === 'all' ? 50000 : parseInt(newLimit);
-    setFilters(prev => ({ ...prev, limit, offset: 0 }));
+    const per_page = newLimit === 'all' ? 50000 : parseInt(newLimit);
+    setFilters(prev => ({ ...prev, per_page, page: 1 }));
     setCurrentPage(1);
   };
 
   const handlePageChange = (page: number) => {
-    const limit = filters.limit || 100;
-    const newOffset = (page - 1) * limit;
+    const per_page = filters.per_page || 100;
     
-    // Ensure we don't exceed the 50k limit
-    if (newOffset >= 50000) return;
+    // Ensure we don't exceed reasonable limits
+    if ((page - 1) * per_page >= 50000) return;
     
-    setFilters(prev => ({ ...prev, offset: newOffset }));
+    setFilters(prev => ({ ...prev, page }));
     setCurrentPage(page);
     
     // Scroll to top when changing pages
@@ -135,7 +134,7 @@ export const Cards = () => {
   };
 
   const clearAllFilters = () => {
-    setFilters({ limit: 100, offset: 0 });
+    setFilters({ per_page: 100, page: 1 });
     setSearchTerm('');
     setCurrentPage(1);
     setShowOnlyEgyptian(false);
@@ -155,13 +154,12 @@ export const Cards = () => {
     filteredCards = filteredCards.filter(card => alertCardIds.has(card.id));
   }
 
-  const limit = filters.limit || 100;
-  const currentOffset = filters.offset || 0;
+  const pagination = cardsResponse?.pagination;
   
   // Calculate pagination info
-  const maxPossiblePages = Math.ceil(Math.min(50000, totalCards) / limit);
-  const hasNextPage = filteredCards.length === limit && currentOffset + limit < 50000 && filters.limit !== 50000;
-  const hasPrevPage = currentPage > 1;
+  const hasNextPage = pagination?.has_next || false;
+  const hasPrevPage = pagination?.has_prev || false;
+  const totalPages = pagination?.total_pages || 1;
   
   const egyptianCards = filteredCards.filter(card => card.is_egyptian);
   const uniqueBanks = new Set(egyptianCards.map(card => card.egyptian_bank).filter(Boolean));
@@ -403,9 +401,9 @@ export const Cards = () => {
                 With Alerts: <span className="text-purple-400 font-semibold">
                   {cardAlerts ? filteredCards.filter(card => cardAlerts.some(alert => alert.card_id === card.id)).length : 0}
                 </span>
-                {currentOffset > 0 && (
+                {pagination && (
                   <span className="ml-2">
-                    (showing {currentOffset + 1}-{currentOffset + filteredCards.length})
+                    (page {pagination.page} of {pagination.total_pages})
                   </span>
                 )}
               </div>
@@ -422,7 +420,7 @@ export const Cards = () => {
                 <span>Card Results</span>
               </div>
               <Badge variant="outline" className="text-gray-300 border-gray-600">
-                Page {currentPage} of {maxPossiblePages} (max 50k results)
+                Page {currentPage} of {totalPages} (max 50k results)
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -536,7 +534,7 @@ export const Cards = () => {
                 </div>
 
                 {/* Enhanced Pagination */}
-                {(hasNextPage || hasPrevPage) && filters.limit !== 50000 && (
+                {(hasNextPage || hasPrevPage) && filters.per_page !== 50000 && (
                   <div className="mt-6 flex justify-center">
                     <Pagination>
                       <PaginationContent>
@@ -550,14 +548,14 @@ export const Cards = () => {
                         )}
                         
                         {/* Show page numbers with smart ellipsis */}
-                        {Array.from({ length: Math.min(5, maxPossiblePages) }, (_, i) => {
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                           let page;
-                          if (maxPossiblePages <= 5) {
+                          if (totalPages <= 5) {
                             page = i + 1;
                           } else if (currentPage <= 3) {
                             page = i + 1;
-                          } else if (currentPage >= maxPossiblePages - 2) {
-                            page = maxPossiblePages - 4 + i;
+                          } else if (currentPage >= totalPages - 2) {
+                            page = totalPages - 4 + i;
                           } else {
                             page = currentPage - 2 + i;
                           }
@@ -590,7 +588,7 @@ export const Cards = () => {
                 
                 {/* Pagination Info */}
                 <div className="mt-4 text-center text-sm text-gray-400">
-                  Showing page {currentPage} of up to {maxPossiblePages} pages (limited to 50,000 results total)
+                  Showing page {currentPage} of {totalPages} pages
                 </div>
               </>
             )}

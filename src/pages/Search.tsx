@@ -14,8 +14,8 @@ import { toast } from '@/hooks/use-toast';
 
 export const Search = () => {
   const [filters, setFilters] = useState<SearchFilters>({
-    limit: 100,
-    offset: 0,
+    per_page: 100,
+    page: 1,
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [isFiltering, setIsFiltering] = useState(false);
@@ -23,16 +23,13 @@ export const Search = () => {
   const [totalCredentials, setTotalCredentials] = useState(0);
   const navigate = useNavigate();
 
-  const { data: credentials, isLoading, error, refetch } = useQuery({
+  const { data: credentialsResponse, isLoading, error, refetch } = useQuery({
     queryKey: ['credentials', filters],
     queryFn: async () => {
       const result = await apiService.getCredentials(filters);
-      // If we got less than the limit, we know this is the last page
-      if (Array.isArray(result) && result.length < (filters.limit || 100)) {
-        setTotalCredentials((filters.offset || 0) + result.length);
-      } else if (Array.isArray(result)) {
-        // Estimate total for pagination display
-        setTotalCredentials(Math.min(50000, (filters.offset || 0) + result.length + 1));
+      // Update total from pagination info
+      if (result?.pagination) {
+        setTotalCredentials(result.pagination.total_count);
       }
       return result;
     },
@@ -58,7 +55,7 @@ export const Search = () => {
     setIsFiltering(true);
     const newFilters: SearchFilters = {
       ...filters,
-      offset: 0,
+      page: 1,
     };
 
     if (searchTerm.trim()) {
@@ -79,25 +76,24 @@ export const Search = () => {
     } else {
       delete (newFilters as any)[key];
     }
-    newFilters.offset = 0;
+    newFilters.page = 1;
     setFilters(newFilters);
     setCurrentPage(1);
   };
 
   const handleLimitChange = (newLimit: string) => {
-    const limit = newLimit === 'all' ? 50000 : parseInt(newLimit);
-    setFilters(prev => ({ ...prev, limit, offset: 0 }));
+    const per_page = newLimit === 'all' ? 50000 : parseInt(newLimit);
+    setFilters(prev => ({ ...prev, per_page, page: 1 }));
     setCurrentPage(1);
   };
 
   const handlePageChange = (page: number) => {
-    const limit = filters.limit || 100;
-    const newOffset = (page - 1) * limit;
+    const per_page = filters.per_page || 100;
     
-    // Ensure we don't exceed the 50k limit
-    if (newOffset >= 50000) return;
+    // Ensure we don't exceed reasonable limits
+    if ((page - 1) * per_page >= 50000) return;
     
-    setFilters(prev => ({ ...prev, offset: newOffset }));
+    setFilters(prev => ({ ...prev, page }));
     setCurrentPage(page);
     
     // Scroll to top when changing pages
@@ -108,8 +104,8 @@ export const Search = () => {
     try {
       const exportFilters = { ...filters };
       // Remove pagination for export to get all matching results
-      delete exportFilters.limit;
-      delete exportFilters.offset;
+      delete exportFilters.per_page;
+      delete exportFilters.page;
       
       const blob = await apiService.exportCredentials(format, exportFilters);
       const url = window.URL.createObjectURL(blob);
@@ -136,7 +132,7 @@ export const Search = () => {
   };
 
   const clearAllFilters = () => {
-    setFilters({ limit: 100, offset: 0 });
+    setFilters({ per_page: 100, page: 1 });
     setSearchTerm('');
     setCurrentPage(1);
   };
@@ -147,14 +143,13 @@ export const Search = () => {
     return 'bg-red-100 text-red-800 border-red-200';
   };
 
-  const safeCredentials = Array.isArray(credentials) ? credentials : [];
-  const limit = filters.limit || 100;
-  const currentOffset = filters.offset || 0;
+  const safeCredentials = credentialsResponse?.results || [];
+  const pagination = credentialsResponse?.pagination;
   
   // Calculate pagination info
-  const maxPossiblePages = Math.ceil(Math.min(50000, totalCredentials) / limit);
-  const hasNextPage = safeCredentials.length === limit && currentOffset + limit < 50000 && filters.limit !== 50000;
-  const hasPrevPage = currentPage > 1;
+  const hasNextPage = pagination?.has_next || false;
+  const hasPrevPage = pagination?.has_prev || false;
+  const totalPages = pagination?.total_pages || 1;
 
   const countries = countryStats?.map(c => c.country) || [];
   const stealerTypes = stealerStats?.map(s => s.stealer_type) || [];
@@ -347,9 +342,9 @@ export const Search = () => {
               </div>
               <div className="text-gray-400 text-sm">
                 Found: <span className="text-white font-semibold">{safeCredentials.length}</span> credentials
-                {currentOffset > 0 && (
+                {pagination && (
                   <span className="ml-2">
-                    (showing {currentOffset + 1}-{currentOffset + safeCredentials.length})
+                    (page {pagination.page} of {pagination.total_pages})
                   </span>
                 )}
               </div>
@@ -366,7 +361,7 @@ export const Search = () => {
                 <span>Search Results</span>
               </div>
               <Badge variant="outline" className="text-gray-300 border-gray-600">
-                Page {currentPage} of {maxPossiblePages} (max 50k results)
+                Page {currentPage} of {totalPages} (max 50k results)
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -385,12 +380,12 @@ export const Search = () => {
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
                 <p className="text-gray-400 mt-2">Searching credentials...</p>
               </div>
-            ) : safeCredentials.length === 0 ? (
+            ) : !error && !isLoading && safeCredentials.length === 0 ? (
               <div className="text-center py-8">
                 <Shield className="h-12 w-12 text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-400">No credentials found matching your search criteria</p>
               </div>
-            ) : (
+            ) : !error && !isLoading && (
               <>
                 <div className="overflow-x-auto">
                   <Table>
@@ -462,7 +457,7 @@ export const Search = () => {
                 </div>
 
                 {/* Enhanced Pagination */}
-                {(hasNextPage || hasPrevPage) && filters.limit !== 50000 && (
+                {(hasNextPage || hasPrevPage) && filters.per_page !== 50000 && (
                   <div className="mt-6 flex justify-center">
                     <Pagination>
                       <PaginationContent>
@@ -476,14 +471,14 @@ export const Search = () => {
                         )}
                         
                         {/* Show page numbers with smart ellipsis */}
-                        {Array.from({ length: Math.min(5, maxPossiblePages) }, (_, i) => {
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                           let page;
-                          if (maxPossiblePages <= 5) {
+                          if (totalPages <= 5) {
                             page = i + 1;
                           } else if (currentPage <= 3) {
                             page = i + 1;
-                          } else if (currentPage >= maxPossiblePages - 2) {
-                            page = maxPossiblePages - 4 + i;
+                          } else if (currentPage >= totalPages - 2) {
+                            page = totalPages - 4 + i;
                           } else {
                             page = currentPage - 2 + i;
                           }
@@ -516,7 +511,7 @@ export const Search = () => {
                 
                 {/* Pagination Info */}
                 <div className="mt-4 text-center text-sm text-gray-400">
-                  Showing page {currentPage} of up to {maxPossiblePages} pages (limited to 50,000 results total)
+                  Showing page {currentPage} of {totalPages} pages
                 </div>
               </>
             )}

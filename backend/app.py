@@ -1444,9 +1444,6 @@ def get_card_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Automatically check for new card matches if there's new data
-        check_for_new_data_and_run_watchlist()
-        
         # Build query with filters
         where_conditions = []
         params = []
@@ -1591,9 +1588,6 @@ def get_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Automatically check for new credential matches if there's new data
-        check_for_new_data_and_run_watchlist()
-        
         # Build query with filters
         where_conditions = []
         params = []
@@ -1692,9 +1686,6 @@ def get_optimized_alerts():
         
         # Calculate offset
         offset = (page - 1) * per_page
-        
-        # Automatically check for new credential matches if there's new data
-        check_for_new_data_and_run_watchlist()
         
         # Build query with filters using the optimized table
         where_conditions = []
@@ -2564,6 +2555,9 @@ def delete_bin_watchlist_item(item_id):
 def get_watchlist_stats():
     """Get watchlist statistics and alert counts"""
     try:
+        # Check for new data and run watchlist if needed
+        check_for_new_data_and_run_watchlist()
+        
         # Get watchlist items with their alert counts
         watchlist_stats_query = """
             SELECT 
@@ -2640,6 +2634,9 @@ def get_watchlist_stats():
 def get_comprehensive_dashboard():
     """Get all dashboard statistics in a single optimized API call"""
     try:
+        # Check for new data and run watchlist if needed (only on dashboard calls)
+        check_for_new_data_and_run_watchlist()
+        
         # Get country filter from query parameters
         country_filter = request.args.get('country')
         
@@ -3500,11 +3497,12 @@ def check_for_new_data_and_run_watchlist():
                 SELECT table_name, last_insert, insert_count 
                 FROM data_change_tracker 
                 WHERE table_name IN ('credentials', 'cards', 'system_info', 'watchlist', 'card_watchlist')
+                ORDER BY table_name
             """
             results = execute_query(query)
             
             if not results:
-                logger.warning("No data change tracking found - triggers may not be set up")
+                logger.debug("No data change tracking found - triggers may not be set up")
                 return False
             
             new_credentials = False
@@ -3512,30 +3510,44 @@ def check_for_new_data_and_run_watchlist():
             new_watchlist_rules = False
             new_card_watchlist_rules = False
             
+            # Debug current timestamps
+            logger.debug(f"Current check timestamps:")
+            logger.debug(f"  - last_credential_check: {last_credential_check}")
+            logger.debug(f"  - last_card_check: {last_card_check}")
+            logger.debug(f"  - last_watchlist_check: {last_watchlist_check}")
+            logger.debug(f"  - last_card_watchlist_check: {last_card_watchlist_check}")
+            
             for result in results:
                 table_name = result['table_name']
                 last_insert = result['last_insert']
                 insert_count = result['insert_count']
                 
+                logger.debug(f"Checking {table_name}: last_insert={last_insert}, count={insert_count}")
+                
                 if table_name in ['credentials', 'system_info']:
-                    if last_insert > last_credential_check:
+                    if last_insert and last_insert > last_credential_check:
                         new_credentials = True
-                        logger.info(f"New {table_name} data detected - last insert: {last_insert}")
+                        logger.info(f"🔔 New {table_name} data detected - last insert: {last_insert} (after {last_credential_check})")
                 
                 elif table_name == 'cards':
-                    if last_insert > last_card_check:
+                    if last_insert and last_insert > last_card_check:
                         new_cards = True
-                        logger.info(f"New cards data detected - last insert: {last_insert}")
+                        logger.info(f"🔔 New cards data detected - last insert: {last_insert} (after {last_card_check})")
                 
                 elif table_name == 'watchlist':
-                    if last_insert > last_watchlist_check:
+                    if last_insert and last_insert > last_watchlist_check:
                         new_watchlist_rules = True
-                        logger.info(f"New credential watchlist rules detected - last insert: {last_insert}")
+                        logger.info(f"🔔 New credential watchlist rules detected - last insert: {last_insert} (after {last_watchlist_check})")
                 
                 elif table_name == 'card_watchlist':
-                    if last_insert > last_card_watchlist_check:
+                    if last_insert and last_insert > last_card_watchlist_check:
                         new_card_watchlist_rules = True
-                        logger.info(f"New BIN watchlist rules detected - last insert: {last_insert}")
+                        logger.info(f"🔔 New BIN watchlist rules detected - last insert: {last_insert} (after {last_card_watchlist_check})")
+            
+            # Only log if there's something to do
+            if not (new_credentials or new_cards or new_watchlist_rules or new_card_watchlist_rules):
+                logger.debug("No new data detected, skipping watchlist checks")
+                return False
             
             # Run appropriate watchlist checks
             checks_run = 0
@@ -3548,8 +3560,10 @@ def check_for_new_data_and_run_watchlist():
                     check_watchlist_matches()
                     if new_credentials:
                         last_credential_check = datetime.now()
+                        logger.debug(f"Updated last_credential_check to {last_credential_check}")
                     if new_watchlist_rules:
                         last_watchlist_check = datetime.now()
+                        logger.debug(f"Updated last_watchlist_check to {last_watchlist_check}")
                     logger.info("✓ Credential watchlist check completed")
                     checks_run += 1
                 except Exception as e:
@@ -3563,8 +3577,10 @@ def check_for_new_data_and_run_watchlist():
                     check_card_watchlist_matches()
                     if new_cards:
                         last_card_check = datetime.now()
+                        logger.debug(f"Updated last_card_check to {last_card_check}")
                     if new_card_watchlist_rules:
                         last_card_watchlist_check = datetime.now()
+                        logger.debug(f"Updated last_card_watchlist_check to {last_card_watchlist_check}")
                     logger.info("✓ Card watchlist check completed")
                     checks_run += 1
                 except Exception as e:
@@ -3574,6 +3590,8 @@ def check_for_new_data_and_run_watchlist():
             
     except Exception as e:
         logger.error(f"Error checking for new data: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 # Initialize database only once in main process

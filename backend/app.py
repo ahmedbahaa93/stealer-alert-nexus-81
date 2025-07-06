@@ -3256,6 +3256,142 @@ def reset_watchlist_triggers():
         logger.error(f"Error resetting watchlist triggers: {e}")
         return jsonify({'error': 'Failed to reset watchlist triggers'}), 500
 
+@app.route('/api/maintenance/fix-tracker-corruption', methods=['POST'])
+def fix_tracker_corruption():
+    """Fix corrupted data_change_tracker table"""
+    try:
+        logger.info("Tracker corruption fix triggered via API")
+        
+        # Check authentication (in production, add proper auth)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or 'admin' not in auth_header.lower():
+            return jsonify({'error': 'Admin access required'}), 403
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor()
+        fixes_applied = []
+        
+        try:
+            # Check for corruption (identical timestamps across all tables)
+            cursor.execute("""
+                SELECT last_insert, COUNT(*) as count
+                FROM data_change_tracker 
+                GROUP BY last_insert
+                HAVING COUNT(*) > 1
+                ORDER BY count DESC
+            """)
+            
+            corruption_results = cursor.fetchall()
+            
+            if corruption_results:
+                fixes_applied.append(f"Found {len(corruption_results)} identical timestamps affecting multiple tables")
+                
+                # Reset tracker to match actual table data
+                logger.info("Resetting tracker to match real table data...")
+                
+                # Update credentials tracker
+                cursor.execute("""
+                    UPDATE data_change_tracker 
+                    SET last_insert = (SELECT COALESCE(MAX(created_at), CURRENT_TIMESTAMP - INTERVAL '1 hour') FROM credentials),
+                        insert_count = (SELECT COUNT(*) FROM credentials)
+                    WHERE table_name = 'credentials'
+                """)
+                
+                # Update cards tracker  
+                cursor.execute("""
+                    UPDATE data_change_tracker 
+                    SET last_insert = (SELECT COALESCE(MAX(created_at), CURRENT_TIMESTAMP - INTERVAL '1 hour') FROM cards),
+                        insert_count = (SELECT COUNT(*) FROM cards)
+                    WHERE table_name = 'cards'
+                """)
+                
+                # Update system_info tracker
+                cursor.execute("""
+                    UPDATE data_change_tracker 
+                    SET last_insert = (SELECT COALESCE(MAX(created_at), CURRENT_TIMESTAMP - INTERVAL '1 hour') FROM system_info),
+                        insert_count = (SELECT COUNT(*) FROM system_info)
+                    WHERE table_name = 'system_info'
+                """)
+                
+                # Update watchlist tracker
+                cursor.execute("""
+                    UPDATE data_change_tracker 
+                    SET last_insert = (SELECT COALESCE(MAX(created_at), CURRENT_TIMESTAMP - INTERVAL '1 hour') FROM watchlist),
+                        insert_count = (SELECT COUNT(*) FROM watchlist)
+                    WHERE table_name = 'watchlist'
+                """)
+                
+                # Update card_watchlist tracker
+                cursor.execute("""
+                    UPDATE data_change_tracker 
+                    SET last_insert = (SELECT COALESCE(MAX(created_at), CURRENT_TIMESTAMP - INTERVAL '1 hour') FROM card_watchlist),
+                        insert_count = (SELECT COUNT(*) FROM card_watchlist)
+                    WHERE table_name = 'card_watchlist'
+                """)
+                
+                fixes_applied.append("Reset all tracker timestamps to match actual table data")
+                
+                # Also reset the application-level timestamps
+                global last_credential_check, last_card_check, last_watchlist_check, last_card_watchlist_check
+                current_time = datetime.now()
+                last_credential_check = current_time
+                last_card_check = current_time
+                last_watchlist_check = current_time
+                last_card_watchlist_check = current_time
+                
+                fixes_applied.append("Reset application-level check timestamps")
+                
+            else:
+                fixes_applied.append("No corruption detected - tracker timestamps are unique")
+            
+            # Verify triggers exist and recreate if missing
+            cursor.execute("""
+                SELECT trigger_name 
+                FROM information_schema.triggers 
+                WHERE trigger_name LIKE '%_insert_trigger'
+            """)
+            
+            existing_triggers = [row[0] for row in cursor.fetchall()]
+            expected_triggers = [
+                'credential_insert_trigger',
+                'card_insert_trigger', 
+                'system_insert_trigger',
+                'watchlist_insert_trigger',
+                'card_watchlist_insert_trigger'
+            ]
+            
+            missing_triggers = [t for t in expected_triggers if t not in existing_triggers]
+            
+            if missing_triggers:
+                fixes_applied.append(f"Found {len(missing_triggers)} missing triggers - recreating...")
+                # Recreate triggers by calling the creation function
+                # This is safer than doing it inline
+                fixes_applied.append("Trigger recreation requires restart - please restart the application")
+            else:
+                fixes_applied.append("All database triggers are present")
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Tracker corruption check and fix completed',
+            'fixes_applied': fixes_applied,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in tracker corruption fix: {e}")
+        return jsonify({'error': f'Failed to fix tracker corruption: {str(e)}'}), 500
+
 @app.route('/api/maintenance/fix-schema', methods=['POST'])
 def fix_database_schema():
     """Fix database schema issues and clean up problematic data"""
@@ -3505,6 +3641,14 @@ def check_for_new_data_and_run_watchlist():
                 logger.debug("No data change tracking found - triggers may not be set up")
                 return False
             
+            # CORRUPTION CHECK: Detect if all timestamps are identical (corruption)
+            timestamps = [r['last_insert'] for r in results if r['last_insert']]
+            if len(timestamps) > 1 and len(set(timestamps)) == 1:
+                logger.warning(f"⚠️ CORRUPTION DETECTED: All tracker tables have identical timestamp {timestamps[0]}")
+                logger.warning("This indicates tracker corruption. Skipping checks to prevent false triggers.")
+                logger.warning("Run: POST /api/maintenance/fix-tracker-corruption to fix this issue")
+                return False
+            
             new_credentials = False
             new_cards = False
             new_watchlist_rules = False
@@ -3524,25 +3668,42 @@ def check_for_new_data_and_run_watchlist():
                 
                 logger.debug(f"Checking {table_name}: last_insert={last_insert}, count={insert_count}")
                 
+                # Additional safety check: Don't trigger if timestamp is too recent (< 5 seconds ago)
+                # This prevents false triggers from rapid API calls
+                if last_insert:
+                    time_diff = (datetime.now() - last_insert).total_seconds()
+                    if time_diff < 5:
+                        logger.debug(f"Skipping {table_name} - timestamp too recent ({time_diff:.1f}s ago)")
+                        continue
+                
                 if table_name in ['credentials', 'system_info']:
                     if last_insert and last_insert > last_credential_check:
-                        new_credentials = True
-                        logger.info(f"🔔 New {table_name} data detected - last insert: {last_insert} (after {last_credential_check})")
+                        # Additional validation: Check if this is significantly newer
+                        time_diff = (last_insert - last_credential_check).total_seconds()
+                        if time_diff > 10:  # Only trigger if > 10 seconds newer
+                            new_credentials = True
+                            logger.info(f"🔔 New {table_name} data detected - last insert: {last_insert} (after {last_credential_check})")
                 
                 elif table_name == 'cards':
                     if last_insert and last_insert > last_card_check:
-                        new_cards = True
-                        logger.info(f"🔔 New cards data detected - last insert: {last_insert} (after {last_card_check})")
+                        time_diff = (last_insert - last_card_check).total_seconds()
+                        if time_diff > 10:
+                            new_cards = True
+                            logger.info(f"🔔 New cards data detected - last insert: {last_insert} (after {last_card_check})")
                 
                 elif table_name == 'watchlist':
                     if last_insert and last_insert > last_watchlist_check:
-                        new_watchlist_rules = True
-                        logger.info(f"🔔 New credential watchlist rules detected - last insert: {last_insert} (after {last_watchlist_check})")
+                        time_diff = (last_insert - last_watchlist_check).total_seconds()
+                        if time_diff > 10:
+                            new_watchlist_rules = True
+                            logger.info(f"🔔 New credential watchlist rules detected - last insert: {last_insert} (after {last_watchlist_check})")
                 
                 elif table_name == 'card_watchlist':
                     if last_insert and last_insert > last_card_watchlist_check:
-                        new_card_watchlist_rules = True
-                        logger.info(f"🔔 New BIN watchlist rules detected - last insert: {last_insert} (after {last_card_watchlist_check})")
+                        time_diff = (last_insert - last_card_watchlist_check).total_seconds()
+                        if time_diff > 10:
+                            new_card_watchlist_rules = True
+                            logger.info(f"🔔 New BIN watchlist rules detected - last insert: {last_insert} (after {last_card_watchlist_check})")
             
             # Only log if there's something to do
             if not (new_credentials or new_cards or new_watchlist_rules or new_card_watchlist_rules):

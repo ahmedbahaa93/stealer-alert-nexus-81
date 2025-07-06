@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, Shield } from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { AlertTriangle, Shield, Clock } from 'lucide-react';
 import { apiService } from '@/services/api';
 
 export const WatchlistStats = () => {
@@ -16,9 +17,6 @@ export const WatchlistStats = () => {
   const { data: watchlist, isLoading: watchlistLoading } = useQuery({
     queryKey: ['watchlist'],
     queryFn: () => apiService.getWatchlist(),
-    onSuccess: (data) => {
-      setWatchlistData(data);
-    },
   });
 
   // Extract alerts from response

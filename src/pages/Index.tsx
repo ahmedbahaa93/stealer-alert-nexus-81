@@ -16,7 +16,7 @@ import {
   Search,
 } from "lucide-react";
 
-export const Index = () => {
+const Index = () => {
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
 
   const { data: dashboardData, isLoading: dashboardLoading } = useQuery({
@@ -280,3 +280,5 @@ export const Index = () => {
     </div>
   );
 };
+
+export default Index;

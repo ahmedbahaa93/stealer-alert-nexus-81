@@ -187,6 +187,31 @@ export interface CardSearchFilters {
   offset?: number;
 }
 
+export interface ComprehensiveDashboardResponse {
+  overview: {
+    total_credentials: number;
+    total_cards: number;
+    total_systems: number;
+    total_alerts: number;
+    alert_breakdown: {
+      credential_alerts: number;
+      card_alerts: number;
+    };
+  };
+  stealer_distribution: Array<{ stealer_type: string; count: number }>;
+  timeline: Array<{ date: string; count: number }>;
+  country_distribution: Array<{ country: string; count: number }>;
+  top_domains: Array<{ domain: string; count: number }>;
+  filters: {
+    country?: string;
+  };
+  metadata: {
+    generated_at: string;
+    optimized: boolean;
+    single_call: boolean;
+  };
+}
+
 export class ApiService {
   private baseUrl = 'http://localhost:5000/api';
   private token: string | null = null;
@@ -602,6 +627,23 @@ export class ApiService {
     if (!response.ok) {
       throw new Error('Failed to mark card alert as false positive');
     }
+  }
+
+  async getComprehensiveDashboard(country?: string): Promise<ComprehensiveDashboardResponse> {
+    const params = new URLSearchParams();
+    if (country) {
+      params.append('country', country);
+    }
+    
+    const response = await fetch(`${this.baseUrl}/dashboard/comprehensive?${params}`, {
+      headers: this.getHeaders(),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch comprehensive dashboard data');
+    }
+    
+    return response.json();
   }
 }
 

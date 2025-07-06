@@ -10,107 +10,21 @@ export const Dashboard = () => {
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [alertsPerPage, setAlertsPerPage] = useState(10);
 
-  // Base queries
-  const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ['stats'],
-    queryFn: () => apiService.getStats(),
+  // Use the new comprehensive dashboard API
+  const { data: dashboardData, isLoading: dashboardLoading } = useQuery({
+    queryKey: ['comprehensiveDashboard', selectedCountry],
+    queryFn: () => apiService.getComprehensiveDashboard(selectedCountry || undefined),
   });
 
-  // Country-filtered credentials query
-  const { data: filteredCredentials, isLoading: filteredCredentialsLoading } = useQuery({
-    queryKey: ['credentials', { country: selectedCountry, limit: 50000 }],
-    queryFn: () => apiService.getCredentials({ 
-      country: selectedCountry || undefined,
-      limit: 50000 
-    }),
-    enabled: !!selectedCountry,
-  });
-
-  // Country-filtered cards query
-  const { data: filteredCards, isLoading: filteredCardsLoading } = useQuery({
-    queryKey: ['cards', { country: selectedCountry, limit: 50000 }],
-    queryFn: () => apiService.getCards({
-      country: selectedCountry || undefined,
-      limit: 50000
-    }),
-    enabled: !!selectedCountry,
-  });
-
-  // Enhanced alert queries with country filtering
-  const { data: allAlerts, isLoading: allAlertsLoading } = useQuery({
-    queryKey: ['alerts', { limit: 10000, country: selectedCountry }],
-    queryFn: async () => {
-      const alerts = await apiService.getAlerts({ limit: 10000 });
-      
-      if (!selectedCountry) return alerts;
-      
-      // Filter alerts based on country by checking related credential/card data
-      const countryFilteredAlerts = [];
-      for (const alert of alerts) {
-        try {
-          if (alert.record_type === 'credential') {
-            const credential = await apiService.getCredentialDetail(alert.record_id);
-            if (credential.credential.system_info?.country === selectedCountry) {
-              countryFilteredAlerts.push(alert);
-            }
-          }
-        } catch (error) {
-          // If we can't fetch details, skip this alert
-          continue;
-        }
-      }
-      return countryFilteredAlerts;
-    },
-  });
-
-  const { data: allCardAlerts, isLoading: allCardAlertsLoading } = useQuery({
-    queryKey: ['cardAlerts', { limit: 10000, country: selectedCountry }],
-    queryFn: async () => {
-      const cardAlerts = await apiService.getCardAlerts({ limit: 10000 });
-      
-      if (!selectedCountry) return cardAlerts;
-      
-      // Filter card alerts based on country
-      const countryFilteredCardAlerts = [];
-      for (const alert of cardAlerts) {
-        try {
-          const cardDetail = await apiService.getCardDetail(alert.card_id);
-          if (cardDetail.card.country === selectedCountry) {
-            countryFilteredCardAlerts.push(alert);
-          }
-        } catch (error) {
-          // If we can't fetch details, skip this alert
-          continue;
-        }
-      }
-      return countryFilteredCardAlerts;
-    },
-  });
-
-  // Paginated alerts for display
+  // Separate alerts queries (these remain the same for now)
   const { data: alerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
     queryKey: ['alerts', { limit: alertsPerPage }],
     queryFn: () => apiService.getAlerts({ limit: alertsPerPage }),
   });
 
-  const { data: countryData, isLoading: countryLoading } = useQuery({
-    queryKey: ['countries'],
-    queryFn: () => apiService.getCountryStats(),
-  });
-
-  const { data: stealerData, isLoading: stealerLoading } = useQuery({
-    queryKey: ['stealers'],
-    queryFn: () => apiService.getStealerStats(),
-  });
-
-  const { data: domainData, isLoading: domainLoading } = useQuery({
-    queryKey: ['domains'],
-    queryFn: () => apiService.getTopDomains(),
-  });
-
-  const { data: timelineData, isLoading: timelineLoading } = useQuery({
-    queryKey: ['timeline'],
-    queryFn: () => apiService.getTimelineStats(),
+  const { data: allCardAlerts, isLoading: allCardAlertsLoading } = useQuery({
+    queryKey: ['cardAlerts', { limit: 10000 }],
+    queryFn: () => apiService.getCardAlerts({ limit: 10000 }),
   });
 
   // Alert action handlers
@@ -190,103 +104,28 @@ export const Dashboard = () => {
     setAlertsPerPage(newLimit);
   };
 
-  // Fixed filtered stats calculation with proper country filtering
+  // Extract data from comprehensive response
   const getFilteredStats = () => {
-    if (!selectedCountry) {
-      // Global data - use base stats with live alert counts
-      const credentialAlerts = allAlerts?.filter(alert => alert.status === 'new').length || 0;
-      const cardAlerts = allCardAlerts?.filter(alert => alert.status === 'new').length || 0;
-      
+    if (!dashboardData) {
       return {
-        totalCredentials: stats?.total_credentials || 0,
-        totalCards: stats?.total_cards || 0,
-        totalSystems: stats?.total_systems || 0,
-        credentialAlerts,
-        cardAlerts,
+        totalCredentials: 0,
+        totalCards: 0,
+        totalSystems: 0,
+        credentialAlerts: 0,
+        cardAlerts: 0,
       };
     }
 
-    // Country-filtered data - use actual filtered results
-    const credentialAlerts = allAlerts?.filter(alert => alert.status === 'new').length || 0;
-    const cardAlerts = allCardAlerts?.filter(alert => alert.status === 'new').length || 0;
-
-    // Calculate unique systems from filtered credentials
-    const uniqueSystemIds = new Set(
-      filteredCredentials
-        ?.map(c => c.system_info_id)
-        .filter(Boolean) || []
-    );
-
     return {
-      totalCredentials: filteredCredentials?.length || 0,
-      totalCards: filteredCards?.length || 0,
-      totalSystems: uniqueSystemIds.size,
-      credentialAlerts,
-      cardAlerts,
+      totalCredentials: dashboardData.overview.total_credentials,
+      totalCards: dashboardData.overview.total_cards,
+      totalSystems: dashboardData.overview.total_systems,
+      credentialAlerts: dashboardData.overview.alert_breakdown.credential_alerts,
+      cardAlerts: dashboardData.overview.alert_breakdown.card_alerts,
     };
   };
 
-  // Enhanced filtered stealer data
-  const getFilteredStealerData = () => {
-    if (!selectedCountry || !filteredCredentials) {
-      return stealerData || [];
-    }
-
-    const stealerCounts = filteredCredentials.reduce((acc, cred) => {
-      const stealer = cred.stealer_type || 'Unknown';
-      acc[stealer] = (acc[stealer] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-
-    return Object.entries(stealerCounts)
-      .map(([stealer_type, count]) => ({ stealer_type, count }))
-      .sort((a, b) => b.count - a.count);
-  };
-
-  // Enhanced filtered domain data
-  const getFilteredDomainData = () => {
-    if (!selectedCountry || !filteredCredentials) {
-      return domainData || [];
-    }
-
-    const domainCounts = filteredCredentials.reduce((acc, cred) => {
-      if (!cred.url && !cred.domain) return acc;
-      try {
-        const domain = cred.domain || (cred.url ? new URL(cred.url).hostname : null);
-        if (domain) {
-          acc[domain] = (acc[domain] || 0) + 1;
-        }
-      } catch (error) {
-        // Skip invalid URLs
-      }
-      return acc;
-    }, {} as Record<string, number>);
-
-    return Object.entries(domainCounts)
-      .map(([domain, count]) => ({ domain, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20);
-  };
-
-  // Enhanced filtered timeline data
-  const getFilteredTimelineData = () => {
-    if (!selectedCountry || !filteredCredentials) {
-      return timelineData || [];
-    }
-
-    const timelineCounts = filteredCredentials.reduce((acc, cred) => {
-      const date = new Date(cred.created_at).toISOString().split('T')[0];
-      acc[date] = (acc[date] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-
-    return Object.entries(timelineCounts)
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      .slice(-30); // Last 30 days
-  };
-
-  if (statsLoading) {
+  if (dashboardLoading) {
     return (
       <div className="min-h-screen bg-gray-950 p-6">
         <div className="max-w-7xl mx-auto">
@@ -308,14 +147,7 @@ export const Dashboard = () => {
   }
 
   const filteredStats = getFilteredStats();
-  const filteredStealerStats = getFilteredStealerData();
-  const filteredDomainStats = getFilteredDomainData();
-  const filteredTimelineStats = getFilteredTimelineData();
-
-  const chartsLoading = countryLoading || stealerLoading || domainLoading || timelineLoading || 
-    (selectedCountry && (filteredCredentialsLoading || filteredCardsLoading));
-
-  const alertsLoadingState = alertsLoading || allAlertsLoading || allCardAlertsLoading;
+  const alertsLoadingState = alertsLoading || allCardAlertsLoading;
 
   return (
     <div className="min-h-screen bg-gray-950 p-6">
@@ -327,13 +159,13 @@ export const Dashboard = () => {
         />
 
         <DashboardCharts
-          countryData={countryData}
-          filteredStealerStats={filteredStealerStats}
-          filteredDomainStats={filteredDomainStats}
-          filteredTimelineStats={filteredTimelineStats}
+          countryData={dashboardData?.country_distribution || []}
+          filteredStealerStats={dashboardData?.stealer_distribution || []}
+          filteredDomainStats={dashboardData?.top_domains || []}
+          filteredTimelineStats={dashboardData?.timeline || []}
           selectedCountry={selectedCountry}
           onCountryFilter={handleCountryFilter}
-          isLoading={chartsLoading}
+          isLoading={dashboardLoading}
         />
 
         <DashboardAlerts

@@ -171,6 +171,8 @@ export interface SearchFilters {
   country?: string;
   date_from?: string;
   date_to?: string;
+  page?: number;
+  per_page?: number;
   limit?: number;
   offset?: number;
 }
@@ -183,8 +185,23 @@ export interface CardSearchFilters {
   country?: string;
   date_from?: string;
   date_to?: string;
+  page?: number;
+  per_page?: number;
   limit?: number;
   offset?: number;
+}
+
+export interface PaginatedResponse<T> {
+  results: T[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total_count: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+    max_records?: number;
+  };
 }
 
 export interface ComprehensiveDashboardResponse {
@@ -271,7 +288,7 @@ export class ApiService {
     return response.json();
   }
 
-  async getCredentials(filters?: SearchFilters): Promise<Credential[]> {
+  async getCredentials(filters?: SearchFilters): Promise<PaginatedResponse<Credential>> {
     const params = new URLSearchParams();
     if (filters) {
       Object.entries(filters).forEach(([key, value]) => {
@@ -304,7 +321,7 @@ export class ApiService {
     return response.json();
   }
 
-  async getCards(filters?: CardSearchFilters): Promise<Card[]> {
+  async getCards(filters?: CardSearchFilters): Promise<PaginatedResponse<Card>> {
     const params = new URLSearchParams();
     if (filters) {
       Object.entries(filters).forEach(([key, value]) => {
@@ -366,9 +383,9 @@ export class ApiService {
     severity?: string;
     date_from?: string;
     date_to?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<Alert[]> {
+    page?: number;
+    per_page?: number;
+  }): Promise<PaginatedResponse<Alert>> {
     const params = new URLSearchParams();
     if (filters) {
       Object.entries(filters).forEach(([key, value]) => {
@@ -394,9 +411,9 @@ export class ApiService {
     severity?: string;
     date_from?: string;
     date_to?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<CardAlert[]> {
+    page?: number;
+    per_page?: number;
+  }): Promise<PaginatedResponse<CardAlert>> {
     const params = new URLSearchParams();
     if (filters) {
       Object.entries(filters).forEach(([key, value]) => {

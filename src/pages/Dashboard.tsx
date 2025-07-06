@@ -1,3 +1,4 @@
+
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { DashboardStats } from "@/components/DashboardStats";
@@ -16,15 +17,15 @@ export const Dashboard = () => {
     queryFn: () => apiService.getComprehensiveDashboard(selectedCountry || undefined),
   });
 
-  // Separate alerts queries (these remain the same for now)
-  const { data: alerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
-    queryKey: ['alerts', { limit: alertsPerPage }],
-    queryFn: () => apiService.getAlerts({ limit: alertsPerPage }),
+  // Separate alerts queries with new pagination structure
+  const { data: alertsResponse, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
+    queryKey: ['alerts', { per_page: alertsPerPage }],
+    queryFn: () => apiService.getAlerts({ per_page: alertsPerPage }),
   });
 
-  const { data: allCardAlerts, isLoading: allCardAlertsLoading } = useQuery({
-    queryKey: ['cardAlerts', { limit: 10000 }],
-    queryFn: () => apiService.getCardAlerts({ limit: 10000 }),
+  const { data: allCardAlertsResponse, isLoading: allCardAlertsLoading } = useQuery({
+    queryKey: ['cardAlerts', { per_page: 10000 }],
+    queryFn: () => apiService.getCardAlerts({ per_page: 10000 }),
   });
 
   // Alert action handlers
@@ -125,6 +126,10 @@ export const Dashboard = () => {
     };
   };
 
+  // Extract alerts from pagination response
+  const alerts = alertsResponse?.results || [];
+  const cardAlerts = allCardAlertsResponse?.results || [];
+
   if (dashboardLoading) {
     return (
       <div className="min-h-screen bg-gray-950 p-6">
@@ -170,7 +175,7 @@ export const Dashboard = () => {
 
         <DashboardAlerts
           alerts={alerts}
-          cardAlerts={allCardAlerts?.slice(0, alertsPerPage)}
+          cardAlerts={cardAlerts.slice(0, alertsPerPage)}
           filteredStats={filteredStats}
           alertsPerPage={alertsPerPage}
           onResolveAlert={handleResolveAlert}

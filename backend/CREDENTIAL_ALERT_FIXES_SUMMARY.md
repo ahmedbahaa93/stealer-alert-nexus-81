@@ -47,6 +47,32 @@ LEFT JOIN system_info s ON c.system_info_id = s.id
 WHERE CAST(s.ip AS TEXT) LIKE %s
 ```
 
+### 4. **Database Schema VARCHAR Length Issue** ⚠️ **CRITICAL FIX**
+**Problem**: `system_country` field was defined as `VARCHAR(10)` but country data can be longer.
+
+**Error**: `value too long for type character varying(10)`
+
+**Fix Applied**:
+- Updated table schema: `system_country VARCHAR(10)` → `system_country VARCHAR(50)`
+- Added automatic schema migration on server startup
+- Added data validation and truncation for all fields
+- Created maintenance endpoint for manual schema fixes
+
+```sql
+-- Schema update
+ALTER TABLE credential_alert_details ALTER COLUMN system_country TYPE VARCHAR(50);
+
+-- Data validation function
+def safe_country_value(country_value):
+    if not country_value:
+        return None
+    country_str = str(country_value).strip()
+    if len(country_str) > 50:
+        logger.warning(f"Country value too long, truncating: {country_str[:50]}...")
+        return country_str[:50]
+    return country_str
+```
+
 ## 🚀 **Major Enhancements Implemented**
 
 ### 1. **Enhanced Alert Creation Function**
@@ -128,6 +154,35 @@ curl -X POST "http://localhost:5000/api/maintenance/backfill-alerts" \
 - Creates new enhanced alerts
 - Populates optimization table for new alerts
 
+### 4. **`POST /api/maintenance/fix-schema`** ⚠️ **NEW**
+**Purpose**: Fix database schema issues and clean up problematic data
+
+**Features**:
+- Automatically updates VARCHAR field lengths
+- Cleans up existing data that exceeds field limits
+- Truncates overly long values safely
+- Requires admin authentication
+
+**Usage**:
+```bash
+curl -X POST "http://localhost:5000/api/maintenance/fix-schema" \
+  -H "Authorization: Bearer admin-token"
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Schema fixes completed",
+  "fixes_applied": [
+    "Updated system_country column from VARCHAR(10) to VARCHAR(50)",
+    "Truncated 15 country values that were too long",
+    "Truncated 3 domain values that were too long"
+  ],
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
 ## 📊 **Enhanced Health Check**
 
 **Endpoint**: `/api/health`
@@ -180,7 +235,7 @@ CREATE TABLE credential_alert_details (
     username VARCHAR(255),
     password TEXT,
     stealer_type VARCHAR(100),
-    system_country VARCHAR(10),
+    system_country VARCHAR(50),
     system_ip INET,  -- Properly handled IP field
     computer_name VARCHAR(255),
     os_version VARCHAR(255),
@@ -257,6 +312,40 @@ curl "http://localhost:5000/api/health"
 3. **Performance**: Optimized queries are 60-80% faster than fallback queries
 4. **Monitoring**: Use health check endpoint to monitor optimization status
 5. **Graceful Degradation**: System works perfectly even with partial optimization
+
+## ⚠️ **Troubleshooting**
+
+### **Issue**: "value too long for type character varying(10)" Error
+
+**Symptoms**:
+```
+ERROR:__main__:Database query error: value too long for type character varying(10)
+```
+
+**Cause**: The `system_country` field was initially created with VARCHAR(10) but some country data is longer.
+
+**Solutions** (in order of preference):
+
+1. **Automatic Fix on Restart**: Simply restart the server - it will automatically detect and fix the schema issue.
+
+2. **Manual Schema Fix**: Use the maintenance endpoint:
+   ```bash
+   curl -X POST "http://localhost:5000/api/maintenance/fix-schema" \
+     -H "Authorization: Bearer admin-token"
+   ```
+
+3. **Manual Database Fix**: If you have direct database access:
+   ```sql
+   ALTER TABLE credential_alert_details ALTER COLUMN system_country TYPE VARCHAR(50);
+   ```
+
+4. **Force Backfill After Fix**: After fixing the schema, trigger a backfill:
+   ```bash
+   curl -X POST "http://localhost:5000/api/maintenance/backfill-alerts" \
+     -H "Authorization: Bearer admin-token"
+   ```
+
+**Prevention**: This issue is now automatically prevented in new installations and fixed during server startup for existing installations.
 
 ---
 

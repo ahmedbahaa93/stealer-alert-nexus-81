@@ -289,7 +289,7 @@ def create_missing_tables():
                     username VARCHAR(255),
                     password TEXT,
                     stealer_type VARCHAR(100),
-                    system_country VARCHAR(10),
+                    system_country VARCHAR(50),
                     system_ip INET,
                     computer_name VARCHAR(255),
                     os_version VARCHAR(255),
@@ -301,6 +301,26 @@ def create_missing_tables():
             print("✓ credential_alert_details table created")
         else:
             print("✓ credential_alert_details table already exists")
+            
+            # Check if we need to update the system_country column length
+            try:
+                cursor.execute("""
+                    SELECT character_maximum_length 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'credential_alert_details' 
+                    AND column_name = 'system_country'
+                """)
+                result = cursor.fetchone()
+                
+                if result and result[0] == 10:
+                    print("🔄 Updating system_country column length from 10 to 50 characters...")
+                    cursor.execute("ALTER TABLE credential_alert_details ALTER COLUMN system_country TYPE VARCHAR(50)")
+                    print("✓ system_country column updated to VARCHAR(50)")
+                else:
+                    print("✓ system_country column already has adequate length")
+                    
+            except Exception as e:
+                print(f"⚠ Warning: Could not check/update system_country column: {e}")
         
         conn.commit()
         print("✓ All missing tables committed to database")
@@ -598,6 +618,18 @@ def create_enhanced_credential_alert(watchlist_item, credential_data):
                 logger.warning(f"Could not convert IP address: {e}")
                 system_ip = None
         
+        # Handle country value safely
+        safe_country = safe_country_value(details.get('country'))
+        
+        # Safely handle other text fields that might be too long
+        safe_domain = str(details.get('domain', ''))[:255] if details.get('domain') else None
+        safe_username = str(details.get('username', ''))[:255] if details.get('username') else None
+        safe_password = str(details.get('password', '')) if details.get('password') else None
+        safe_stealer_type = str(details.get('stealer_type', ''))[:100] if details.get('stealer_type') else None
+        safe_computer_name = str(details.get('computer_name', ''))[:255] if details.get('computer_name') else None
+        safe_os_version = str(details.get('os_version', ''))[:255] if details.get('os_version') else None
+        safe_machine_user = str(details.get('machine_user', ''))[:255] if details.get('machine_user') else None
+        
         # Insert into optimization table with proper error handling
         detail_insert_query = """
             INSERT INTO credential_alert_details (
@@ -610,16 +642,16 @@ def create_enhanced_credential_alert(watchlist_item, credential_data):
         detail_params = [
             alert_id,
             details['id'],
-            details.get('domain'),
-            details.get('url'),
-            details.get('username'),
-            details.get('password'),
-            details.get('stealer_type'),
-            details.get('country'),
+            safe_domain,
+            str(details.get('url', '')) if details.get('url') else None,
+            safe_username,
+            safe_password,
+            safe_stealer_type,
+            safe_country,
             system_ip,  # Use the safely converted IP
-            details.get('computer_name'),
-            details.get('os_version'),
-            details.get('machine_user')
+            safe_computer_name,
+            safe_os_version,
+            safe_machine_user
         ]
         
         detail_insert_result = execute_query(detail_insert_query, detail_params, fetch=False)
@@ -634,6 +666,21 @@ def create_enhanced_credential_alert(watchlist_item, credential_data):
     except Exception as e:
         logger.error(f"Error creating enhanced credential alert: {e}")
         return False
+
+def safe_country_value(country_value):
+    """Safely process country value to fit database constraints"""
+    if not country_value:
+        return None
+    
+    # Convert to string and strip whitespace
+    country_str = str(country_value).strip()
+    
+    # If it's longer than 50 characters, truncate it
+    if len(country_str) > 50:
+        logger.warning(f"Country value too long, truncating: {country_str[:50]}...")
+        return country_str[:50]
+    
+    return country_str
 
 def backfill_credential_alert_details():
     """Backfill missing credential alert details for existing alerts"""
@@ -687,6 +734,18 @@ def backfill_credential_alert_details():
                         logger.warning(f"Could not convert IP address: {e}")
                         system_ip = None
                 
+                # Handle country value safely
+                safe_country = safe_country_value(details.get('country'))
+                
+                # Safely handle other text fields that might be too long
+                safe_domain = str(details.get('domain', ''))[:255] if details.get('domain') else None
+                safe_username = str(details.get('username', ''))[:255] if details.get('username') else None
+                safe_password = str(details.get('password', '')) if details.get('password') else None
+                safe_stealer_type = str(details.get('stealer_type', ''))[:100] if details.get('stealer_type') else None
+                safe_computer_name = str(details.get('computer_name', ''))[:255] if details.get('computer_name') else None
+                safe_os_version = str(details.get('os_version', ''))[:255] if details.get('os_version') else None
+                safe_machine_user = str(details.get('machine_user', ''))[:255] if details.get('machine_user') else None
+                
                 # Insert into optimization table
                 detail_insert_query = """
                     INSERT INTO credential_alert_details (
@@ -699,16 +758,16 @@ def backfill_credential_alert_details():
                 detail_params = [
                     alert['alert_id'],
                     details['id'],
-                    details.get('domain'),
-                    details.get('url'),
-                    details.get('username'),
-                    details.get('password'),
-                    details.get('stealer_type'),
-                    details.get('country'),
+                    safe_domain,
+                    str(details.get('url', '')) if details.get('url') else None,
+                    safe_username,
+                    safe_password,
+                    safe_stealer_type,
+                    safe_country,
                     system_ip,
-                    details.get('computer_name'),
-                    details.get('os_version'),
-                    details.get('machine_user')
+                    safe_computer_name,
+                    safe_os_version,
+                    safe_machine_user
                 ]
                 
                 result = execute_query(detail_insert_query, detail_params, fetch=False)
@@ -717,6 +776,8 @@ def backfill_credential_alert_details():
                     success_count += 1
                     if success_count % 10 == 0:
                         logger.info(f"Backfilled {success_count} alert details so far...")
+                else:
+                    logger.error(f"Failed to insert details for alert {alert['alert_id']}")
                         
             except Exception as e:
                 logger.error(f"Error backfilling alert {alert['alert_id']}: {e}")
@@ -2963,6 +3024,91 @@ def force_watchlist_check():
         logger.error(f"Error in force watchlist check: {e}")
         return jsonify({'error': 'Failed to run watchlist check'}), 500
 
+@app.route('/api/maintenance/fix-schema', methods=['POST'])
+def fix_database_schema():
+    """Fix database schema issues and clean up problematic data"""
+    try:
+        logger.info("Manual schema fix triggered via API")
+        
+        # Check authentication (in production, add proper auth)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or 'admin' not in auth_header.lower():
+            return jsonify({'error': 'Admin access required'}), 403
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor()
+        fixes_applied = []
+        
+        try:
+            # Check and fix system_country column length
+            cursor.execute("""
+                SELECT character_maximum_length 
+                FROM information_schema.columns 
+                WHERE table_name = 'credential_alert_details' 
+                AND column_name = 'system_country'
+            """)
+            result = cursor.fetchone()
+            
+            if result and result[0] == 10:
+                cursor.execute("ALTER TABLE credential_alert_details ALTER COLUMN system_country TYPE VARCHAR(50)")
+                fixes_applied.append("Updated system_country column from VARCHAR(10) to VARCHAR(50)")
+                logger.info("Fixed system_country column length")
+            else:
+                fixes_applied.append("system_country column already has adequate length")
+            
+            # Clean up any existing problematic data
+            cursor.execute("""
+                UPDATE credential_alert_details 
+                SET system_country = LEFT(system_country, 50) 
+                WHERE LENGTH(system_country) > 50
+            """)
+            updated_rows = cursor.rowcount
+            if updated_rows > 0:
+                fixes_applied.append(f"Truncated {updated_rows} country values that were too long")
+                
+            # Clean up other potentially problematic fields
+            field_fixes = [
+                ("domain", 255),
+                ("username", 255),
+                ("stealer_type", 100),
+                ("computer_name", 255),
+                ("os_version", 255),
+                ("machine_user", 255)
+            ]
+            
+            for field_name, max_length in field_fixes:
+                cursor.execute(f"""
+                    UPDATE credential_alert_details 
+                    SET {field_name} = LEFT({field_name}, %s) 
+                    WHERE LENGTH({field_name}) > %s
+                """, [max_length, max_length])
+                
+                updated_rows = cursor.rowcount
+                if updated_rows > 0:
+                    fixes_applied.append(f"Truncated {updated_rows} {field_name} values that were too long")
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Schema fixes completed',
+            'fixes_applied': fixes_applied,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in schema fix endpoint: {e}")
+        return jsonify({'error': f'Failed to fix schema: {str(e)}'}), 500
+
 # Initialize database only once in main process
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     print("✓ Running in reloader main process")
@@ -3035,6 +3181,18 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
                                         except:
                                             system_ip = None
                                     
+                                    # Handle country value safely
+                                    safe_country = safe_country_value(details.get('country'))
+                                    
+                                    # Safely handle other text fields that might be too long
+                                    safe_domain = str(details.get('domain', ''))[:255] if details.get('domain') else None
+                                    safe_username = str(details.get('username', ''))[:255] if details.get('username') else None
+                                    safe_password = str(details.get('password', '')) if details.get('password') else None
+                                    safe_stealer_type = str(details.get('stealer_type', ''))[:100] if details.get('stealer_type') else None
+                                    safe_computer_name = str(details.get('computer_name', ''))[:255] if details.get('computer_name') else None
+                                    safe_os_version = str(details.get('os_version', ''))[:255] if details.get('os_version') else None
+                                    safe_machine_user = str(details.get('machine_user', ''))[:255] if details.get('machine_user') else None
+                                    
                                     detail_insert_query = """
                                         INSERT INTO credential_alert_details (
                                             alert_id, credential_id, domain, url, username, password,
@@ -3044,11 +3202,12 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
                                     """
                                     
                                     result = execute_query(detail_insert_query, [
-                                        alert['alert_id'], details['id'], details.get('domain'),
-                                        details.get('url'), details.get('username'), details.get('password'),
-                                        details.get('stealer_type'), details.get('country'), system_ip,
-                                        details.get('computer_name'), details.get('os_version'), 
-                                        details.get('machine_user')
+                                        alert['alert_id'], details['id'], safe_domain,
+                                        str(details.get('url', '')) if details.get('url') else None, 
+                                        safe_username, safe_password,
+                                        safe_stealer_type, safe_country, system_ip,
+                                        safe_computer_name, safe_os_version, 
+                                        safe_machine_user
                                     ], fetch=False)
                                     
                                     if result:

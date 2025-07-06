@@ -954,7 +954,7 @@ def get_stats():
             {country_where}
         """
         cred_result = execute_query(cred_query, country_params)
-        total_credentials = cred_result[0]['count'] if cred_result else 0
+        total_credentials = cred_result[0]['count'] if cred_result and len(cred_result) > 0 else 0
         
         # Get total cards with optional country filter
         card_query = f"""
@@ -964,7 +964,7 @@ def get_stats():
             {country_where}
         """
         card_result = execute_query(card_query, country_params)
-        total_cards = card_result[0]['count'] if card_result else 0
+        total_cards = card_result[0]['count'] if card_result and len(card_result) > 0 else 0
         
         # Get total systems with optional country filter
         system_query = f"""
@@ -973,7 +973,7 @@ def get_stats():
             {country_where}
         """
         system_result = execute_query(system_query, country_params)
-        total_systems = system_result[0]['count'] if system_result else 0
+        total_systems = system_result[0]['count'] if system_result and len(system_result) > 0 else 0
         
         # Get credential alerts count (not limited to 100)
         credential_alert_query = """
@@ -987,7 +987,7 @@ def get_stats():
             credential_alert_query += " AND s.country = %s"
         
         credential_alert_result = execute_query(credential_alert_query, country_params)
-        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result else 0
+        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result and len(credential_alert_result) > 0 else 0
         
         # Get card alerts count (not limited to 100)
         card_alert_query = """
@@ -1001,7 +1001,7 @@ def get_stats():
             card_alert_query += " AND s.country = %s"
             
         card_alert_result = execute_query(card_alert_query, country_params)
-        card_alerts = card_alert_result[0]['count'] if card_alert_result else 0
+        card_alerts = card_alert_result[0]['count'] if card_alert_result and len(card_alert_result) > 0 else 0
         
         # Total alerts
         total_alerts = credential_alerts + card_alerts
@@ -1121,7 +1121,7 @@ def search_cards():
             ) as limited_results
         """
         count_result = execute_query(count_query, params)
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main search query
         query = f"""
@@ -1363,7 +1363,7 @@ def get_egyptian_cards():
             ) as limited_results
         """
         count_result = execute_query(count_query, [egyptian_bins])
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main query for Egyptian cards
         query = """
@@ -1471,7 +1471,7 @@ def get_card_alerts():
             {where_clause}
         """
         count_result = execute_query(count_query, params)
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main query with pagination
         query = f"""
@@ -1618,7 +1618,7 @@ def get_alerts():
             {where_clause}
         """
         count_result = execute_query(count_query, params)
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main query with pagination
         query = f"""
@@ -1731,7 +1731,7 @@ def get_optimized_alerts():
             count_query += " AND " + " AND ".join(where_conditions)
         
         count_result = execute_query(count_query, params)
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main optimized query - LEFT JOIN to include alerts even without details
         query = f"""
@@ -1952,7 +1952,7 @@ def search_credentials():
             ) as limited_results
         """
         count_result = execute_query(count_query, params)
-        total_count = count_result[0]['total_count'] if count_result else 0
+        total_count = count_result[0]['total_count'] if count_result and len(count_result) > 0 else 0
         
         # Main search query
         query = f"""
@@ -2477,8 +2477,8 @@ def get_watchlist_stats():
         total_credential_alerts = execute_query(total_credential_alerts_query)
         total_card_alerts = execute_query(total_card_alerts_query)
         
-        credential_alert_count = total_credential_alerts[0]['count'] if total_credential_alerts else 0
-        card_alert_count = total_card_alerts[0]['count'] if total_card_alerts else 0
+        credential_alert_count = total_credential_alerts[0]['count'] if total_credential_alerts and len(total_credential_alerts) > 0 else 0
+        card_alert_count = total_card_alerts[0]['count'] if total_card_alerts and len(total_card_alerts) > 0 else 0
         
         # Convert datetime objects to ISO strings
         if watchlist_stats:
@@ -2533,7 +2533,7 @@ def get_comprehensive_dashboard():
             {country_where}
         """
         cred_result = execute_query(cred_query, country_params)
-        overview_stats['total_credentials'] = cred_result[0]['count'] if cred_result else 0
+        overview_stats['total_credentials'] = cred_result[0]['count'] if cred_result and len(cred_result) > 0 else 0
         
         # Total cards
         card_query = f"""
@@ -2543,7 +2543,7 @@ def get_comprehensive_dashboard():
             {country_where}
         """
         card_result = execute_query(card_query, country_params)
-        overview_stats['total_cards'] = card_result[0]['count'] if card_result else 0
+        overview_stats['total_cards'] = card_result[0]['count'] if card_result and len(card_result) > 0 else 0
         
         # Total systems
         system_query = f"""
@@ -2552,7 +2552,7 @@ def get_comprehensive_dashboard():
             {country_where}
         """
         system_result = execute_query(system_query, country_params)
-        overview_stats['total_systems'] = system_result[0]['count'] if system_result else 0
+        overview_stats['total_systems'] = system_result[0]['count'] if system_result and len(system_result) > 0 else 0
         
         # Alert statistics with country filtering
         credential_alert_query = """
@@ -2566,7 +2566,7 @@ def get_comprehensive_dashboard():
             credential_alert_query += " AND s.country = %s"
         
         credential_alert_result = execute_query(credential_alert_query, country_params)
-        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result else 0
+        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result and len(credential_alert_result) > 0 else 0
         
         card_alert_query = """
             SELECT COUNT(*) as count 
@@ -2579,7 +2579,7 @@ def get_comprehensive_dashboard():
             card_alert_query += " AND s.country = %s"
             
         card_alert_result = execute_query(card_alert_query, country_params)
-        card_alerts = card_alert_result[0]['count'] if card_alert_result else 0
+        card_alerts = card_alert_result[0]['count'] if card_alert_result and len(card_alert_result) > 0 else 0
         
         overview_stats['total_alerts'] = credential_alerts + card_alerts
         overview_stats['alert_breakdown'] = {
@@ -2966,7 +2966,7 @@ def get_alert_details_status():
         # Get total alerts
         total_alerts_query = "SELECT COUNT(*) as count FROM alerts WHERE record_type = 'credential'"
         total_alerts_result = execute_query(total_alerts_query)
-        total_alerts = total_alerts_result[0]['count'] if total_alerts_result else 0
+        total_alerts = total_alerts_result[0]['count'] if total_alerts_result and len(total_alerts_result) > 0 else 0
         
         # Get alerts with details
         alerts_with_details_query = """
@@ -2976,7 +2976,7 @@ def get_alert_details_status():
             WHERE a.record_type = 'credential'
         """
         alerts_with_details_result = execute_query(alerts_with_details_query)
-        alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result else 0
+        alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result and len(alerts_with_details_result) > 0 else 0
         
         # Get alerts missing details
         missing_details = total_alerts - alerts_with_details
@@ -3145,7 +3145,7 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
                 # Check status first
                 total_alerts_query = "SELECT COUNT(*) as count FROM alerts WHERE record_type = 'credential'"
                 total_alerts_result = execute_query(total_alerts_query)
-                total_alerts = total_alerts_result[0]['count'] if total_alerts_result else 0
+                total_alerts = total_alerts_result[0]['count'] if total_alerts_result and len(total_alerts_result) > 0 else 0
                 
                 alerts_with_details_query = """
                     SELECT COUNT(DISTINCT a.id) as count 
@@ -3154,7 +3154,7 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
                     WHERE a.record_type = 'credential'
                 """
                 alerts_with_details_result = execute_query(alerts_with_details_query)
-                alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result else 0
+                alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result and len(alerts_with_details_result) > 0 else 0
                 
                 missing_details = total_alerts - alerts_with_details
                 

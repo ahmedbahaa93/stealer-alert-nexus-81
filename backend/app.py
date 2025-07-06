@@ -275,6 +275,32 @@ def create_missing_tables():
             print("✓ card_alerts table created")
         else:
             print("✓ card_alerts table already exists")
+
+        # Create optimized credential_alert_details table
+        if 'credential_alert_details' not in existing_tables:
+            print("Creating credential_alert_details table...")
+            cursor.execute('''
+                CREATE TABLE credential_alert_details (
+                    id SERIAL PRIMARY KEY,
+                    alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
+                    credential_id INTEGER NOT NULL,
+                    domain VARCHAR(255),
+                    url TEXT,
+                    username VARCHAR(255),
+                    password TEXT,
+                    stealer_type VARCHAR(100),
+                    system_country VARCHAR(10),
+                    system_ip INET,
+                    computer_name VARCHAR(255),
+                    os_version VARCHAR(255),
+                    machine_user VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✓ credential_alert_details table created")
+        else:
+            print("✓ credential_alert_details table already exists")
         
         conn.commit()
         print("✓ All missing tables committed to database")
@@ -294,6 +320,10 @@ def create_missing_tables():
             'CREATE INDEX IF NOT EXISTS idx_card_watchlist_active ON card_watchlist(is_active)',
             'CREATE INDEX IF NOT EXISTS idx_card_alerts_status ON card_alerts(status)',
             'CREATE INDEX IF NOT EXISTS idx_card_alerts_bin ON card_alerts(matched_bin)',
+            'CREATE INDEX IF NOT EXISTS idx_credential_alert_details_alert_id ON credential_alert_details(alert_id)',
+            'CREATE INDEX IF NOT EXISTS idx_credential_alert_details_credential_id ON credential_alert_details(credential_id)',
+            'CREATE INDEX IF NOT EXISTS idx_credential_alert_details_domain ON credential_alert_details(domain)',
+            'CREATE INDEX IF NOT EXISTS idx_credential_alert_details_country ON credential_alert_details(system_country)',
         ]
         
         for i, index_sql in enumerate(indexes):
@@ -396,7 +426,7 @@ def verify_tables():
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        required_tables = ['users', 'watchlist', 'alerts', 'credentials', 'system_info', 'cards', 'card_watchlist', 'card_alerts']
+        required_tables = ['users', 'watchlist', 'alerts', 'credentials', 'system_info', 'cards', 'card_watchlist', 'card_alerts', 'credential_alert_details']
         
         print("\nVerifying tables:")
         for table in required_tables:
@@ -519,10 +549,75 @@ def check_card_watchlist_matches():
     except Exception as e:
         logger.error(f"Error in card watchlist matching: {e}")
 
-def check_watchlist_matches():
-    """Enhanced watchlist matching with better coverage"""
+def create_enhanced_credential_alert(watchlist_item, credential_data):
+    """Create a credential alert with full details in the optimization table"""
     try:
-        logger.info("Starting watchlist matching check...")
+        # First create the basic alert
+        alert_query = """
+            INSERT INTO alerts (watchlist_id, matched_field, matched_value, 
+                              record_type, record_id, severity, status)
+            VALUES (%s, %s, %s, 'credential', %s, %s, 'new')
+            RETURNING id
+        """
+        alert_result = execute_query(alert_query, [
+            watchlist_item['id'], 
+            watchlist_item['field_type'], 
+            credential_data.get('matched_value', ''),
+            credential_data['id'],
+            watchlist_item['severity']
+        ])
+        
+        if not alert_result:
+            return False
+            
+        alert_id = alert_result[0]['id']
+        
+        # Get full credential and system details
+        detail_query = """
+            SELECT c.*, s.country, s.ip, s.computer_name, s.os_version, s.machine_user
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE c.id = %s
+        """
+        detail_result = execute_query(detail_query, [credential_data['id']])
+        
+        if detail_result:
+            details = detail_result[0]
+            
+            # Insert into optimization table
+            detail_insert_query = """
+                INSERT INTO credential_alert_details (
+                    alert_id, credential_id, domain, url, username, password,
+                    stealer_type, system_country, system_ip, computer_name,
+                    os_version, machine_user
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_query(detail_insert_query, [
+                alert_id,
+                details['id'],
+                details.get('domain'),
+                details.get('url'),
+                details.get('username'),
+                details.get('password'),
+                details.get('stealer_type'),
+                details.get('country'),
+                details.get('ip'),
+                details.get('computer_name'),
+                details.get('os_version'),
+                details.get('machine_user')
+            ], fetch=False)
+            
+            logger.info(f"Created enhanced credential alert {alert_id} with full details")
+            return True
+        
+    except Exception as e:
+        logger.error(f"Error creating enhanced credential alert: {e}")
+        return False
+
+def check_watchlist_matches():
+    """Enhanced watchlist matching with better coverage and optimization table"""
+    try:
+        logger.info("Starting enhanced watchlist matching check...")
         
         # Get active watchlist items
         watchlist_query = "SELECT * FROM watchlist WHERE is_active = TRUE"
@@ -597,33 +692,22 @@ def check_watchlist_matches():
                 logger.warning(f"Unknown field type: {field_type}")
                 continue
             
-            # Create alerts for matches
+            # Create enhanced alerts for matches
             if matches:
                 logger.info(f"Found {len(matches)} matches for {keyword}")
                 for match in matches:
                     try:
-                        alert_query = """
-                            INSERT INTO alerts (watchlist_id, matched_field, matched_value, 
-                                              record_type, record_id, severity, status)
-                            VALUES (%s, %s, %s, 'credential', %s, %s, 'new')
-                        """
-                        execute_query(alert_query, [
-                            item['id'], 
-                            field_type, 
-                            match['matched_value'],
-                            match['id'],
-                            item['severity']
-                        ], fetch=False)
-                        alerts_created += 1
+                        if create_enhanced_credential_alert(item, match):
+                            alerts_created += 1
                     except Exception as e:
-                        logger.error(f"Error creating alert for match {match['id']}: {e}")
+                        logger.error(f"Error creating enhanced alert for match {match['id']}: {e}")
             else:
                 logger.info(f"No new matches found for {keyword}")
         
-        logger.info(f"Watchlist check completed. Created {alerts_created} new alerts")
+        logger.info(f"Enhanced watchlist check completed. Created {alerts_created} new alerts")
         
     except Exception as e:
-        logger.error(f"Error in watchlist matching: {e}")
+        logger.error(f"Error in enhanced watchlist matching: {e}")
 
 # ... keep existing code (auth/login endpoint)
 
@@ -1404,6 +1488,118 @@ def get_alerts():
         logger.error(f"Error getting alerts: {e}")
         return jsonify({'error': 'Failed to fetch alerts'}), 500
 
+@app.route('/api/alerts/optimized')
+def get_optimized_alerts():
+    """Get optimized alerts using the credential_alert_details table for better performance"""
+    try:
+        # Get query parameters for filtering
+        status_filter = request.args.get('status')
+        severity_filter = request.args.get('severity')
+        country_filter = request.args.get('country')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        
+        # Pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 1000))
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Check for new matches before returning alerts
+        check_watchlist_matches()
+        
+        # Build query with filters using the optimized table
+        where_conditions = []
+        params = []
+        
+        if status_filter:
+            where_conditions.append("a.status = %s")
+            params.append(status_filter)
+        
+        if severity_filter:
+            where_conditions.append("a.severity = %s")
+            params.append(severity_filter)
+        
+        if country_filter:
+            where_conditions.append("cad.system_country = %s")
+            params.append(country_filter)
+        
+        if date_from:
+            where_conditions.append("a.created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("a.created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # Get total count first
+        count_query = f"""
+            SELECT COUNT(*) as total_count
+            FROM alerts a
+            LEFT JOIN credential_alert_details cad ON a.id = cad.alert_id
+            LEFT JOIN watchlist w ON a.watchlist_id = w.id
+            {where_clause}
+        """
+        count_result = execute_query(count_query, params)
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main optimized query - uses credential_alert_details for fast lookups
+        query = f"""
+            SELECT 
+                a.id, a.watchlist_id, a.matched_field, a.matched_value,
+                a.record_type, a.record_id, a.severity, a.status,
+                a.reviewed_by, a.reviewed_at, a.created_at,
+                w.keyword, w.description, w.field_type,
+                u.username as reviewed_by_username,
+                cad.domain, cad.url, cad.username as credential_username,
+                cad.stealer_type, cad.system_country, cad.system_ip,
+                cad.computer_name, cad.os_version, cad.machine_user
+            FROM alerts a
+            LEFT JOIN credential_alert_details cad ON a.id = cad.alert_id
+            LEFT JOIN watchlist w ON a.watchlist_id = w.id
+            LEFT JOIN users u ON a.reviewed_by = u.id
+            {where_clause}
+            ORDER BY a.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([per_page, offset])
+        result = execute_query(query, params)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for alert in result:
+                for key, value in alert.items():
+                    if isinstance(value, datetime):
+                        alert[key] = value.isoformat()
+        
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev
+            },
+            'optimized': True,
+            'note': 'This endpoint uses the credential_alert_details table for enhanced performance'
+        })
+    except Exception as e:
+        logger.error(f"Error getting optimized alerts: {e}")
+        return jsonify({'error': 'Failed to fetch optimized alerts'}), 500
+
 @app.route('/api/alerts/<int:alert_id>/resolve', methods=['POST'])
 def resolve_alert(alert_id):
     """Resolve an alert"""
@@ -1615,17 +1811,33 @@ def get_credential_detail(credential_id):
 
 @app.route('/api/stats/countries')
 def get_country_stats():
-    """Get country statistics"""
+    """Get country statistics with optional filtering for dashboard consistency"""
     try:
-        query = """
-            SELECT s.country, COUNT(*) as count
-            FROM system_info s
-            WHERE s.country IS NOT NULL
-            GROUP BY s.country
-            ORDER BY count DESC
-            LIMIT 20
-        """
-        result = execute_query(query)
+        # Get country filter from query parameters
+        country_filter = request.args.get('country')
+        
+        if country_filter:
+            # If filtering by specific country, return just that country's stats
+            query = """
+                SELECT s.country, COUNT(*) as count
+                FROM system_info s
+                WHERE s.country = %s AND s.country IS NOT NULL
+                GROUP BY s.country
+                ORDER BY count DESC
+            """
+            result = execute_query(query, [country_filter])
+        else:
+            # Return all countries
+            query = """
+                SELECT s.country, COUNT(*) as count
+                FROM system_info s
+                WHERE s.country IS NOT NULL
+                GROUP BY s.country
+                ORDER BY count DESC
+                LIMIT 20
+            """
+            result = execute_query(query)
+        
         return jsonify(result if result else [])
     except Exception as e:
         logger.error(f"Error getting country stats: {e}")
@@ -2052,6 +2264,219 @@ def get_watchlist_stats():
     except Exception as e:
         logger.error(f"Error getting watchlist stats: {e}")
         return jsonify({'error': 'Failed to fetch watchlist statistics'}), 500
+
+@app.route('/api/dashboard/comprehensive')
+def get_comprehensive_dashboard():
+    """Get all dashboard statistics in a single optimized API call"""
+    try:
+        # Get country filter from query parameters
+        country_filter = request.args.get('country')
+        
+        # Base where clause for country filtering
+        country_where = ""
+        country_params = []
+        if country_filter:
+            country_where = "WHERE s.country = %s"
+            country_params = [country_filter]
+        
+        # Get overview statistics
+        overview_stats = {}
+        
+        # Total credentials
+        cred_query = f"""
+            SELECT COUNT(*) as count 
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {country_where}
+        """
+        cred_result = execute_query(cred_query, country_params)
+        overview_stats['total_credentials'] = cred_result[0]['count'] if cred_result else 0
+        
+        # Total cards
+        card_query = f"""
+            SELECT COUNT(*) as count 
+            FROM cards c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {country_where}
+        """
+        card_result = execute_query(card_query, country_params)
+        overview_stats['total_cards'] = card_result[0]['count'] if card_result else 0
+        
+        # Total systems
+        system_query = f"""
+            SELECT COUNT(*) as count 
+            FROM system_info s
+            {country_where}
+        """
+        system_result = execute_query(system_query, country_params)
+        overview_stats['total_systems'] = system_result[0]['count'] if system_result else 0
+        
+        # Alert statistics with country filtering
+        credential_alert_query = """
+            SELECT COUNT(*) as count 
+            FROM alerts a
+            LEFT JOIN credentials c ON a.record_id = c.id AND a.record_type = 'credential'
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE a.status = 'new'
+        """
+        if country_filter:
+            credential_alert_query += " AND s.country = %s"
+        
+        credential_alert_result = execute_query(credential_alert_query, country_params)
+        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result else 0
+        
+        card_alert_query = """
+            SELECT COUNT(*) as count 
+            FROM card_alerts ca
+            LEFT JOIN cards c ON ca.card_id = c.id
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE ca.status = 'new'
+        """
+        if country_filter:
+            card_alert_query += " AND s.country = %s"
+            
+        card_alert_result = execute_query(card_alert_query, country_params)
+        card_alerts = card_alert_result[0]['count'] if card_alert_result else 0
+        
+        overview_stats['total_alerts'] = credential_alerts + card_alerts
+        overview_stats['alert_breakdown'] = {
+            'credential_alerts': credential_alerts,
+            'card_alerts': card_alerts
+        }
+        
+        # Get stealer statistics with country filtering
+        if country_filter:
+            stealer_query = """
+                SELECT c.stealer_type, COUNT(*) as count
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE c.stealer_type IS NOT NULL AND s.country = %s
+                GROUP BY c.stealer_type
+                ORDER BY count DESC
+                LIMIT 10
+            """
+            stealer_stats = execute_query(stealer_query, [country_filter])
+        else:
+            stealer_query = """
+                SELECT stealer_type, COUNT(*) as count
+                FROM credentials
+                WHERE stealer_type IS NOT NULL
+                GROUP BY stealer_type
+                ORDER BY count DESC
+                LIMIT 10
+            """
+            stealer_stats = execute_query(stealer_query)
+        
+        # Get timeline statistics with country filtering
+        if country_filter:
+            timeline_query = """
+                SELECT DATE(c.created_at) as date, COUNT(*) as count
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE c.created_at >= CURRENT_DATE - INTERVAL '30 days'
+                AND s.country = %s
+                GROUP BY DATE(c.created_at)
+                ORDER BY date DESC
+                LIMIT 30
+            """
+            timeline_stats = execute_query(timeline_query, [country_filter])
+        else:
+            timeline_query = """
+                SELECT DATE(created_at) as date, COUNT(*) as count
+                FROM credentials
+                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY DATE(created_at)
+                ORDER BY date DESC
+                LIMIT 30
+            """
+            timeline_stats = execute_query(timeline_query)
+        
+        # Convert dates to ISO strings
+        if timeline_stats:
+            for stat in timeline_stats:
+                stat['date'] = stat['date'].isoformat()
+        
+        # Get country distribution
+        if country_filter:
+            country_query = """
+                SELECT s.country, COUNT(*) as count
+                FROM system_info s
+                WHERE s.country = %s AND s.country IS NOT NULL
+                GROUP BY s.country
+            """
+            country_stats = execute_query(country_query, [country_filter])
+        else:
+            country_query = """
+                SELECT s.country, COUNT(*) as count
+                FROM system_info s
+                WHERE s.country IS NOT NULL
+                GROUP BY s.country
+                ORDER BY count DESC
+                LIMIT 10
+            """
+            country_stats = execute_query(country_query)
+        
+        # Get top domains with country filtering
+        if country_filter:
+            domain_query = """
+                SELECT 
+                    COALESCE(c.domain, 
+                        CASE 
+                            WHEN c.url LIKE 'http%' THEN 
+                                SUBSTRING(c.url FROM 'https?://(?:www\.)?([^/]+)')
+                            ELSE c.url 
+                        END
+                    ) as domain,
+                    COUNT(*) as count
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE (c.domain IS NOT NULL OR c.url IS NOT NULL) AND s.country = %s
+                GROUP BY domain
+                ORDER BY count DESC
+                LIMIT 10
+            """
+            domain_stats = execute_query(domain_query, [country_filter])
+        else:
+            domain_query = """
+                SELECT 
+                    COALESCE(domain, 
+                        CASE 
+                            WHEN url LIKE 'http%' THEN 
+                                SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
+                            ELSE url 
+                        END
+                    ) as domain,
+                    COUNT(*) as count
+                FROM credentials
+                WHERE domain IS NOT NULL OR url IS NOT NULL
+                GROUP BY domain
+                ORDER BY count DESC
+                LIMIT 10
+            """
+            domain_stats = execute_query(domain_query)
+        
+        # Compile comprehensive response
+        response = {
+            'overview': overview_stats,
+            'stealer_distribution': stealer_stats or [],
+            'timeline': timeline_stats or [],
+            'country_distribution': country_stats or [],
+            'top_domains': domain_stats or [],
+            'filters': {
+                'country': country_filter
+            },
+            'metadata': {
+                'generated_at': datetime.now().isoformat(),
+                'optimized': True,
+                'single_call': True
+            }
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting comprehensive dashboard: {e}")
+        return jsonify({'error': 'Failed to fetch comprehensive dashboard data'}), 500
 
 @app.route('/api/export/credentials')
 def export_credentials():

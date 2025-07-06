@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -10,7 +11,8 @@ import {
   LogOut, 
   User,
   Bell,
-  TrendingUp
+  TrendingUp,
+  CreditCard
 } from 'lucide-react';
 
 export const Navigation = () => {
@@ -29,6 +31,7 @@ export const Navigation = () => {
     { path: '/alerts', label: 'Alerts', icon: Bell },
     { path: '/watchlist', label: 'Watchlist', icon: Eye },
     { path: '/watchlist-stats', label: 'Watchlist Stats', icon: TrendingUp },
+    { path: '/cards', label: 'Egyptian Cards', icon: CreditCard },
   ];
 
   return (

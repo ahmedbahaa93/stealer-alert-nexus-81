@@ -14,7 +14,7 @@ import { CreditCard, Search as SearchIcon, Building2, AlertTriangle, Target, Eye
 
 export const Cards = () => {
   const [filters, setFilters] = useState<CardSearchFilters>({
-    per_page: 100,
+    per_page: 1000,
     page: 1,
   });
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,10 +29,12 @@ export const Cards = () => {
   const { data: cardsResponse, isLoading, error, refetch } = useQuery({
     queryKey: ['cards', filters],
     queryFn: async () => {
+      console.log('Fetching cards with filters:', filters);
       const result = await apiService.getCards(filters);
-      // Update total cards from pagination info
+      console.log('Cards API response:', result);
       if (result?.pagination) {
         setTotalCards(result.pagination.total_count);
+        console.log('Total cards available:', result.pagination.total_count);
       }
       return result;
     },
@@ -41,15 +43,26 @@ export const Cards = () => {
 
   const { data: cardAlertsResponse } = useQuery({
     queryKey: ['cardAlerts'],
-    queryFn: () => apiService.getCardAlerts({ per_page: 1000 }),
+    queryFn: async () => {
+      console.log('Fetching card alerts...');
+      const result = await apiService.getCardAlerts({ per_page: 10000 });
+      console.log('Card alerts response:', result);
+      return result;
+    },
   });
 
   const { data: cardStats } = useQuery({
     queryKey: ['cardStats'],
-    queryFn: () => apiService.getCardStats(),
+    queryFn: async () => {
+      console.log('Fetching card statistics...');
+      const result = await apiService.getCardStats();
+      console.log('Card stats response:', result);
+      return result;
+    },
   });
 
   const handleSearch = async () => {
+    console.log('Performing search with term:', searchTerm);
     setIsFiltering(true);
     const newFilters: CardSearchFilters = {
       ...filters,
@@ -68,6 +81,7 @@ export const Cards = () => {
   };
 
   const handleFilterChange = (key: keyof CardSearchFilters, value: string | undefined) => {
+    console.log('Filter change:', key, value);
     const newFilters = { ...filters };
     if (value && value !== 'all') {
       (newFilters as any)[key] = value;
@@ -80,21 +94,19 @@ export const Cards = () => {
   };
 
   const handleLimitChange = (newLimit: string) => {
-    const per_page = newLimit === 'all' ? 50000 : parseInt(newLimit);
+    console.log('Limit change:', newLimit);
+    const per_page = newLimit === 'all' ? 100000 : parseInt(newLimit);
     setFilters(prev => ({ ...prev, per_page, page: 1 }));
     setCurrentPage(1);
   };
 
   const handlePageChange = (page: number) => {
-    const per_page = filters.per_page || 100;
-    
-    // Ensure we don't exceed reasonable limits
-    if ((page - 1) * per_page >= 50000) return;
+    console.log('Page change to:', page);
+    const per_page = filters.per_page || 1000;
     
     setFilters(prev => ({ ...prev, page }));
     setCurrentPage(page);
     
-    // Scroll to top when changing pages
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -134,35 +146,40 @@ export const Cards = () => {
   };
 
   const clearAllFilters = () => {
-    setFilters({ per_page: 100, page: 1 });
+    setFilters({ per_page: 1000, page: 1 });
     setSearchTerm('');
     setCurrentPage(1);
     setShowOnlyEgyptian(false);
     setShowOnlyAlertsCards(false);
   };
 
-  // Filter cards based on checkboxes
   let filteredCards = cardsResponse?.results || [];
   const cardAlerts = cardAlertsResponse?.results || [];
   
+  console.log('Raw cards from API:', filteredCards.length);
+  console.log('Card alerts from API:', cardAlerts.length);
+  
   if (showOnlyEgyptian) {
     filteredCards = filteredCards.filter(card => card.is_egyptian);
+    console.log('Filtered to Egyptian cards:', filteredCards.length);
   }
   
   if (showOnlyAlertsCards && cardAlerts) {
     const alertCardIds = new Set(cardAlerts.map(alert => alert.card_id));
     filteredCards = filteredCards.filter(card => alertCardIds.has(card.id));
+    console.log('Filtered to cards with alerts:', filteredCards.length);
   }
 
   const pagination = cardsResponse?.pagination;
   
-  // Calculate pagination info
   const hasNextPage = pagination?.has_next || false;
   const hasPrevPage = pagination?.has_prev || false;
   const totalPages = pagination?.total_pages || 1;
   
   const egyptianCards = filteredCards.filter(card => card.is_egyptian);
   const uniqueBanks = new Set(egyptianCards.map(card => card.egyptian_bank).filter(Boolean));
+  const alertCardIds = cardAlerts ? new Set(cardAlerts.map(alert => alert.card_id)) : new Set();
+  const cardsWithAlerts = filteredCards.filter(card => alertCardIds.has(card.id));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 p-6 animate-fade-in">
@@ -179,19 +196,21 @@ export const Cards = () => {
             </Button>
           </div>
           <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
-            Credit Card Search
+            Credit Card Search - All Available Cards
           </h1>
           <p className="text-gray-400 mt-2 text-lg">
-            Search and analyze compromised credit cards with focus on Egyptian banks
+            Search and analyze all compromised credit cards with focus on Egyptian banks
           </p>
+          <div className="mt-2 text-sm text-gray-500">
+            Total cards in database: <span className="text-white font-semibold">{totalCards.toLocaleString()}</span>
+          </div>
         </div>
 
-        {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
           <Card className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border-blue-800">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-blue-100">
-                Total Cards
+                Current Page Cards
               </CardTitle>
               <CreditCard className="h-4 w-4 text-blue-400" />
             </CardHeader>
@@ -200,7 +219,7 @@ export const Cards = () => {
                 {filteredCards.length.toLocaleString()}
               </div>
               <p className="text-xs text-blue-200">
-                Found in search (page {currentPage})
+                Showing on page {currentPage} of {totalPages}
               </p>
             </CardContent>
           </Card>
@@ -234,7 +253,7 @@ export const Cards = () => {
                 {uniqueBanks.size}
               </div>
               <p className="text-xs text-green-200">
-                Egyptian banks affected
+                Egyptian banks affected (current page)
               </p>
             </CardContent>
           </Card>
@@ -248,21 +267,20 @@ export const Cards = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-white">
-                {cardAlerts ? new Set(cardAlerts.map(alert => alert.card_id)).size : 0}
+                {cardsWithAlerts.length.toLocaleString()}
               </div>
               <p className="text-xs text-purple-200">
-                Cards with alerts
+                Cards with alerts (current page)
               </p>
             </CardContent>
           </Card>
         </div>
 
-        {/* Enhanced Search and Filters */}
         <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700 shadow-lg">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">
               <SearchIcon className="h-5 w-5 text-blue-400" />
-              Card Search & Filter
+              Card Search & Filter - All Available Data
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -290,7 +308,6 @@ export const Cards = () => {
               </Button>
             </div>
 
-            {/* Special Filters */}
             <div className="flex flex-wrap gap-4 p-4 bg-gray-800/50 rounded-lg">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -364,14 +381,15 @@ export const Cards = () => {
 
               <Select onValueChange={handleLimitChange}>
                 <SelectTrigger className="bg-gray-800 border-gray-700 text-white">
-                  <SelectValue placeholder="Results Limit" />
+                  <SelectValue placeholder="Results Per Page" />
                 </SelectTrigger>
                 <SelectContent className="bg-gray-800 border-gray-700">
-                  <SelectItem value="100">100 Results</SelectItem>
-                  <SelectItem value="500">500 Results</SelectItem>
-                  <SelectItem value="1000">1000 Results</SelectItem>
-                  <SelectItem value="5000">5000 Results</SelectItem>
-                  <SelectItem value="all">All Results</SelectItem>
+                  <SelectItem value="500">500 Per Page</SelectItem>
+                  <SelectItem value="1000">1000 Per Page</SelectItem>
+                  <SelectItem value="2000">2000 Per Page</SelectItem>
+                  <SelectItem value="5000">5000 Per Page</SelectItem>
+                  <SelectItem value="10000">10000 Per Page</SelectItem>
+                  <SelectItem value="all">All Available</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -396,11 +414,10 @@ export const Cards = () => {
                 </Button>
               </div>
               <div className="text-gray-400 text-sm">
-                Found: <span className="text-white font-semibold">{filteredCards.length}</span> cards | 
+                Current Page: <span className="text-white font-semibold">{filteredCards.length}</span> cards | 
+                Total Available: <span className="text-blue-400 font-semibold">{totalCards.toLocaleString()}</span> |
                 Egyptian: <span className="text-red-400 font-semibold">{egyptianCards.length}</span> |
-                With Alerts: <span className="text-purple-400 font-semibold">
-                  {cardAlerts ? filteredCards.filter(card => cardAlerts.some(alert => alert.card_id === card.id)).length : 0}
-                </span>
+                With Alerts: <span className="text-purple-400 font-semibold">{cardsWithAlerts.length}</span>
                 {pagination && (
                   <span className="ml-2">
                     (page {pagination.page} of {pagination.total_pages})
@@ -411,16 +428,15 @@ export const Cards = () => {
           </CardContent>
         </Card>
 
-        {/* Results */}
         <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700 shadow-lg">
           <CardHeader>
             <CardTitle className="text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <CreditCard className="h-5 w-5 text-blue-400" />
-                <span>Card Results</span>
+                <span>Card Results - Real Data from Database</span>
               </div>
               <Badge variant="outline" className="text-gray-300 border-gray-600">
-                Page {currentPage} of {totalPages} (max 50k results)
+                Page {currentPage} of {totalPages} (Total: {totalCards.toLocaleString()} cards)
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -428,7 +444,7 @@ export const Cards = () => {
             {error ? (
               <div className="text-center py-8">
                 <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-                <p className="text-red-400 mb-2">Error loading cards</p>
+                <p className="text-red-400 mb-2">Error loading cards from database</p>
                 <p className="text-gray-400 text-sm mb-4">{error.message}</p>
                 <Button onClick={() => refetch()} className="bg-red-600 hover:bg-red-700">
                   Retry
@@ -437,12 +453,13 @@ export const Cards = () => {
             ) : isLoading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-                <p className="text-gray-400 mt-2">Searching cards...</p>
+                <p className="text-gray-400 mt-2">Loading all available cards from database...</p>
               </div>
             ) : filteredCards.length === 0 ? (
               <div className="text-center py-8">
                 <CreditCard className="h-12 w-12 text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-400">No cards found matching your search criteria</p>
+                <p className="text-gray-500 text-sm mt-2">Try adjusting your filters or search terms</p>
               </div>
             ) : (
               <>
@@ -533,8 +550,7 @@ export const Cards = () => {
                   </Table>
                 </div>
 
-                {/* Enhanced Pagination */}
-                {(hasNextPage || hasPrevPage) && filters.per_page !== 50000 && (
+                {(hasNextPage || hasPrevPage) && filters.per_page !== 100000 && (
                   <div className="mt-6 flex justify-center">
                     <Pagination>
                       <PaginationContent>
@@ -547,7 +563,6 @@ export const Cards = () => {
                           </PaginationItem>
                         )}
                         
-                        {/* Show page numbers with smart ellipsis */}
                         {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                           let page;
                           if (totalPages <= 5) {
@@ -586,9 +601,8 @@ export const Cards = () => {
                   </div>
                 )}
                 
-                {/* Pagination Info */}
                 <div className="mt-4 text-center text-sm text-gray-400">
-                  Showing page {currentPage} of {totalPages} pages
+                  Showing page {currentPage} of {totalPages} pages | Total cards available: {totalCards.toLocaleString()}
                 </div>
               </>
             )}

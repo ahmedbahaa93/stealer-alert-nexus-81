@@ -23,16 +23,16 @@ export const CardDashboard = () => {
     queryFn: () => apiService.getCardStats(),
   });
 
-  const { data: allCardAlerts, isLoading: allAlertsLoading } = useQuery({
+  const { data: allCardAlertsResponse, isLoading: allAlertsLoading } = useQuery({
     queryKey: ['allCardAlerts'],
-    queryFn: () => apiService.getCardAlerts({ limit: 50000 }),
+    queryFn: () => apiService.getCardAlerts({ per_page: 50000 }),
   });
 
-  const { data: cardAlerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
-    queryKey: ['cardAlerts', { limit: alertsPerPage, offset: (currentPage - 1) * alertsPerPage }],
+  const { data: cardAlertsResponse, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
+    queryKey: ['cardAlerts', { per_page: alertsPerPage, page: currentPage }],
     queryFn: () => apiService.getCardAlerts({ 
-      limit: alertsPerPage, 
-      offset: (currentPage - 1) * alertsPerPage 
+      per_page: alertsPerPage, 
+      page: currentPage 
     }),
   });
 
@@ -101,7 +101,9 @@ export const CardDashboard = () => {
   };
 
   // Pagination calculations
-  const totalAlerts = allCardAlerts?.length || 0;
+  const allCardAlerts = allCardAlertsResponse?.results || [];
+  const cardAlerts = cardAlertsResponse?.results || [];
+  const totalAlerts = allCardAlerts.length;
   const totalPages = Math.ceil(totalAlerts / alertsPerPage);
   const hasNextPage = currentPage < totalPages;
   const hasPrevPage = currentPage > 1;
@@ -224,7 +226,7 @@ export const CardDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-white">
-                {allCardAlerts?.filter(alert => alert.status === 'new').length || 0}
+                {allCardAlerts.filter(alert => alert.status === 'new').length || 0}
               </div>
               <p className="text-xs text-green-200">
                 New alerts pending

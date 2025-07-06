@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,36 +23,39 @@ export const AlertsDashboard = () => {
     severity: '',
     date_from: '',
     date_to: '',
-    limit: 50,
-    offset: 0,
+    per_page: 50,
+    page: 1,
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [alertTypeFilter, setAlertTypeFilter] = useState<'all' | 'credential' | 'card'>('all');
 
-  const { data: alerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
+  const { data: alertsResponse, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
     queryKey: ['allAlerts', filters],
-    queryFn: () => apiService.getAlerts({ ...filters, limit: 500 }), // Show up to 500 alerts
+    queryFn: () => apiService.getAlerts({ ...filters, per_page: 500 }), // Show up to 500 alerts
   });
 
-  const { data: cardAlerts, isLoading: cardAlertsLoading, refetch: refetchCardAlerts } = useQuery({
+  const { data: cardAlertsResponse, isLoading: cardAlertsLoading, refetch: refetchCardAlerts } = useQuery({
     queryKey: ['cardAlerts', filters],
-    queryFn: () => apiService.getCardAlerts({ ...filters, limit: 500 }),
+    queryFn: () => apiService.getCardAlerts({ ...filters, per_page: 500 }),
   });
 
   // Combined alerts with type filtering
+  const alerts = alertsResponse?.results || [];
+  const cardAlerts = cardAlertsResponse?.results || [];
+  
   let allAlerts = [];
   if (alertTypeFilter === 'all') {
-    allAlerts = [...(alerts || []), ...(cardAlerts || [])];
+    allAlerts = [...alerts, ...cardAlerts];
   } else if (alertTypeFilter === 'credential') {
-    allAlerts = alerts || [];
+    allAlerts = alerts;
   } else if (alertTypeFilter === 'card') {
-    allAlerts = cardAlerts || [];
+    allAlerts = cardAlerts;
   }
 
-  const totalPages = Math.ceil(allAlerts.length / filters.limit);
+  const totalPages = Math.ceil(allAlerts.length / filters.per_page);
   const paginatedAlerts = allAlerts.slice(
-    (currentPage - 1) * filters.limit,
-    currentPage * filters.limit
+    (currentPage - 1) * filters.per_page,
+    currentPage * filters.per_page
   );
 
   const handleResolveAlert = async (alertId: number, isCardAlert: boolean = false) => {
@@ -144,7 +148,7 @@ export const AlertsDashboard = () => {
     setFilters(prev => ({
       ...prev,
       [key]: value === 'all' ? '' : value,
-      offset: 0
+      page: 1
     }));
     setCurrentPage(1);
   };
@@ -155,8 +159,8 @@ export const AlertsDashboard = () => {
       severity: '',
       date_from: '',
       date_to: '',
-      limit: 50,
-      offset: 0,
+      per_page: 50,
+      page: 1,
     });
     setAlertTypeFilter('all');
     setCurrentPage(1);
@@ -182,7 +186,7 @@ export const AlertsDashboard = () => {
   };
 
   // Calculate statistics for combined alerts
-  const combinedAlerts = [...(alerts || []), ...(cardAlerts || [])];
+  const combinedAlerts = [...alerts, ...cardAlerts];
   const severityStats = combinedAlerts.reduce((acc, alert) => {
     acc[alert.severity] = (acc[alert.severity] || 0) + 1;
     return acc;

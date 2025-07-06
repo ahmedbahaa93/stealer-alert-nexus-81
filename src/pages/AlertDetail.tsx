@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,12 +15,12 @@ export const AlertDetail = () => {
   const queryClient = useQueryClient();
   const alertId = parseInt(id || '0');
 
-  const { data: alerts, isLoading } = useQuery({
+  const { data: alertsResponse, isLoading } = useQuery({
     queryKey: ['alerts'],
     queryFn: () => apiService.getAlerts(),
   });
 
-  const alert = alerts?.find(a => a.id === alertId);
+  const alert = alertsResponse?.results?.find(a => a.id === alertId);
 
   const getSeverityIcon = (severity: string) => {
     switch (severity) {

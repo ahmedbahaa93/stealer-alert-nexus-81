@@ -26,25 +26,22 @@ export const Cards = () => {
   const [totalCards, setTotalCards] = useState(0);
   const navigate = useNavigate();
 
-  const { data: cards, isLoading, error, refetch } = useQuery({
+  const { data: cardsResponse, isLoading, error, refetch } = useQuery({
     queryKey: ['cards', filters],
     queryFn: async () => {
       const result = await apiService.getCards(filters);
-      // If we got less than the limit, we know this is the last page
-      if (Array.isArray(result) && result.length < (filters.limit || 100)) {
-        setTotalCards((filters.offset || 0) + result.length);
-      } else if (Array.isArray(result)) {
-        // Estimate total for pagination display
-        setTotalCards(Math.min(50000, (filters.offset || 0) + result.length + 1));
+      // Update total cards from pagination info
+      if (result?.pagination) {
+        setTotalCards(result.pagination.total_count);
       }
       return result;
     },
     enabled: true,
   });
 
-  const { data: cardAlerts } = useQuery({
+  const { data: cardAlertsResponse } = useQuery({
     queryKey: ['cardAlerts'],
-    queryFn: () => apiService.getCardAlerts({ limit: 1000 }),
+    queryFn: () => apiService.getCardAlerts({ per_page: 1000 }),
   });
 
   const { data: cardStats } = useQuery({
@@ -146,7 +143,8 @@ export const Cards = () => {
   };
 
   // Filter cards based on checkboxes
-  let filteredCards = Array.isArray(cards) ? cards : [];
+  let filteredCards = cardsResponse?.results || [];
+  const cardAlerts = cardAlertsResponse?.results || [];
   
   if (showOnlyEgyptian) {
     filteredCards = filteredCards.filter(card => card.is_egyptian);

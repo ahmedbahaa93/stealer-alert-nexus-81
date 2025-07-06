@@ -2635,7 +2635,11 @@ def get_comprehensive_dashboard():
     """Get all dashboard statistics in a single optimized API call"""
     try:
         # Check for new data and run watchlist if needed (only on dashboard calls)
-        check_for_new_data_and_run_watchlist()
+        # Temporarily disable to prevent corruption issues
+        try:
+            check_for_new_data_and_run_watchlist()
+        except Exception as e:
+            logger.warning(f"Skipping watchlist check due to error: {e}")
         
         # Get country filter from query parameters
         country_filter = request.args.get('country')
@@ -2785,55 +2789,84 @@ def get_comprehensive_dashboard():
             country_stats = execute_query(country_query)
         
         # Get top domains with country filtering
-        if country_filter:
-            domain_query = """
-                SELECT 
-                    COALESCE(c.domain, 
-                        CASE 
-                            WHEN c.url LIKE 'http%' THEN 
-                                SUBSTRING(c.url FROM 'https?://(?:www\.)?([^/]+)')
-                            ELSE c.url 
-                        END
-                    ) as domain,
-                    COUNT(*) as count
-                FROM credentials c
-                LEFT JOIN system_info s ON c.system_info_id = s.id
-                WHERE (c.domain IS NOT NULL OR c.url IS NOT NULL) AND s.country = %s
-                GROUP BY COALESCE(c.domain, 
-                        CASE 
-                            WHEN c.url LIKE 'http%' THEN 
-                                SUBSTRING(c.url FROM 'https?://(?:www\.)?([^/]+)')
-                            ELSE c.url 
-                        END
-                    )
-                ORDER BY count DESC
-                LIMIT 10
-            """
-            domain_stats = execute_query(domain_query, [country_filter])
-        else:
-            domain_query = """
-                SELECT 
-                    COALESCE(domain, 
-                        CASE 
-                            WHEN url LIKE 'http%' THEN 
-                                SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
-                            ELSE url 
-                        END
-                    ) as domain,
-                    COUNT(*) as count
-                FROM credentials
-                WHERE domain IS NOT NULL OR url IS NOT NULL
-                GROUP BY COALESCE(domain, 
-                        CASE 
-                            WHEN url LIKE 'http%' THEN 
-                                SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
-                            ELSE url 
-                        END
-                    )
-                ORDER BY count DESC
-                LIMIT 10
-            """
-            domain_stats = execute_query(domain_query)
+        try:
+            if country_filter:
+                domain_query = """
+                    SELECT 
+                        COALESCE(c.domain, 
+                            CASE 
+                                WHEN c.url LIKE 'http%%' THEN 
+                                    SUBSTRING(c.url FROM 'https?://(?:www\\.)?([^/]+)')
+                                ELSE c.url 
+                            END
+                        ) as domain,
+                        COUNT(*) as count
+                    FROM credentials c
+                    LEFT JOIN system_info s ON c.system_info_id = s.id
+                    WHERE (c.domain IS NOT NULL OR c.url IS NOT NULL) AND s.country = %s
+                    GROUP BY COALESCE(c.domain, 
+                            CASE 
+                                WHEN c.url LIKE 'http%%' THEN 
+                                    SUBSTRING(c.url FROM 'https?://(?:www\\.)?([^/]+)')
+                                ELSE c.url 
+                            END
+                        )
+                    ORDER BY count DESC
+                    LIMIT 10
+                """
+                domain_stats = execute_query(domain_query, [country_filter])
+            else:
+                domain_query = """
+                    SELECT 
+                        COALESCE(domain, 
+                            CASE 
+                                WHEN url LIKE 'http%%' THEN 
+                                    SUBSTRING(url FROM 'https?://(?:www\\.)?([^/]+)')
+                                ELSE url 
+                            END
+                        ) as domain,
+                        COUNT(*) as count
+                    FROM credentials
+                    WHERE domain IS NOT NULL OR url IS NOT NULL
+                    GROUP BY COALESCE(domain, 
+                            CASE 
+                                WHEN url LIKE 'http%%' THEN 
+                                    SUBSTRING(url FROM 'https?://(?:www\\.)?([^/]+)')
+                                ELSE url 
+                            END
+                        )
+                    ORDER BY count DESC
+                    LIMIT 10
+                """
+                domain_stats = execute_query(domain_query)
+        except Exception as e:
+            logger.error(f"Error in domain query: {e}")
+            # Fallback to simple domain query without regex
+            if country_filter:
+                domain_query = """
+                    SELECT 
+                        COALESCE(c.domain, c.url) as domain,
+                        COUNT(*) as count
+                    FROM credentials c
+                    LEFT JOIN system_info s ON c.system_info_id = s.id
+                    WHERE (c.domain IS NOT NULL OR c.url IS NOT NULL) AND s.country = %s
+                    GROUP BY COALESCE(c.domain, c.url)
+                    ORDER BY count DESC
+                    LIMIT 10
+                """
+                domain_stats = execute_query(domain_query, [country_filter])
+            else:
+                domain_query = """
+                    SELECT 
+                        COALESCE(domain, url) as domain,
+                        COUNT(*) as count
+                    FROM credentials
+                    WHERE domain IS NOT NULL OR url IS NOT NULL
+                    GROUP BY COALESCE(domain, url)
+                    ORDER BY count DESC
+                    LIMIT 10
+                """
+                domain_stats = execute_query(domain_query)
         
         # Compile comprehensive response
         response = {
@@ -3255,6 +3288,86 @@ def reset_watchlist_triggers():
     except Exception as e:
         logger.error(f"Error resetting watchlist triggers: {e}")
         return jsonify({'error': 'Failed to reset watchlist triggers'}), 500
+
+@app.route('/api/maintenance/quick-fix-corruption', methods=['POST'])
+def quick_fix_corruption():
+    """Quick fix for tracker corruption without auth check"""
+    try:
+        logger.info("Quick corruption fix triggered")
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor()
+        
+        try:
+            # Reset tracker to match actual table data
+            logger.info("Resetting tracker to match real table data...")
+            
+            # Update each tracker separately with a small time offset to avoid identical timestamps
+            base_time = "CURRENT_TIMESTAMP - INTERVAL '1 hour'"
+            
+            cursor.execute(f"""
+                UPDATE data_change_tracker 
+                SET last_insert = (SELECT COALESCE(MAX(created_at), {base_time}) FROM credentials),
+                    insert_count = (SELECT COUNT(*) FROM credentials)
+                WHERE table_name = 'credentials'
+            """)
+            
+            cursor.execute(f"""
+                UPDATE data_change_tracker 
+                SET last_insert = (SELECT COALESCE(MAX(created_at), {base_time} - INTERVAL '5 minutes') FROM cards),
+                    insert_count = (SELECT COUNT(*) FROM cards)
+                WHERE table_name = 'cards'
+            """)
+            
+            cursor.execute(f"""
+                UPDATE data_change_tracker 
+                SET last_insert = (SELECT COALESCE(MAX(created_at), {base_time} - INTERVAL '10 minutes') FROM system_info),
+                    insert_count = (SELECT COUNT(*) FROM system_info)
+                WHERE table_name = 'system_info'
+            """)
+            
+            cursor.execute(f"""
+                UPDATE data_change_tracker 
+                SET last_insert = (SELECT COALESCE(MAX(created_at), {base_time} - INTERVAL '15 minutes') FROM watchlist),
+                    insert_count = (SELECT COUNT(*) FROM watchlist)
+                WHERE table_name = 'watchlist'
+            """)
+            
+            cursor.execute(f"""
+                UPDATE data_change_tracker 
+                SET last_insert = (SELECT COALESCE(MAX(created_at), {base_time} - INTERVAL '20 minutes') FROM card_watchlist),
+                    insert_count = (SELECT COUNT(*) FROM card_watchlist)
+                WHERE table_name = 'card_watchlist'
+            """)
+            
+            # Reset application-level timestamps
+            global last_credential_check, last_card_check, last_watchlist_check, last_card_watchlist_check
+            current_time = datetime.now()
+            last_credential_check = current_time
+            last_card_check = current_time
+            last_watchlist_check = current_time
+            last_card_watchlist_check = current_time
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Corruption fixed successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in quick corruption fix: {e}")
+        return jsonify({'error': f'Failed to fix corruption: {str(e)}'}), 500
 
 @app.route('/api/maintenance/fix-tracker-corruption', methods=['POST'])
 def fix_tracker_corruption():

@@ -1,5 +1,4 @@
-
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import psycopg2
@@ -9,6 +8,8 @@ import hashlib
 from psycopg2.extras import RealDictCursor
 import os
 import sys
+import csv
+import io
 
 app = Flask(__name__)
 CORS(app, origins=["*"])
@@ -671,29 +672,88 @@ def login():
 
 @app.route('/api/stats/overview')
 def get_stats():
-    """Get overview statistics from database"""
+    """Get overview statistics from database with optional country filtering"""
     try:
-        # Get total credentials
-        cred_result = execute_query("SELECT COUNT(*) as count FROM credentials")
+        # Get country filter from query parameters
+        country_filter = request.args.get('country')
+        
+        # Base where clause for country filtering
+        country_where = ""
+        country_params = []
+        if country_filter:
+            country_where = "WHERE s.country = %s"
+            country_params = [country_filter]
+        
+        # Get total credentials with optional country filter
+        cred_query = f"""
+            SELECT COUNT(*) as count 
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {country_where}
+        """
+        cred_result = execute_query(cred_query, country_params)
         total_credentials = cred_result[0]['count'] if cred_result else 0
         
-        # Get total cards
-        card_result = execute_query("SELECT COUNT(*) as count FROM cards")
+        # Get total cards with optional country filter
+        card_query = f"""
+            SELECT COUNT(*) as count 
+            FROM cards c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {country_where}
+        """
+        card_result = execute_query(card_query, country_params)
         total_cards = card_result[0]['count'] if card_result else 0
         
-        # Get total systems
-        system_result = execute_query("SELECT COUNT(*) as count FROM system_info")
+        # Get total systems with optional country filter
+        system_query = f"""
+            SELECT COUNT(*) as count 
+            FROM system_info s
+            {country_where}
+        """
+        system_result = execute_query(system_query, country_params)
         total_systems = system_result[0]['count'] if system_result else 0
         
-        # For alerts, get actual count from alerts table
-        alert_result = execute_query("SELECT COUNT(*) as count FROM alerts WHERE status = 'new'")
-        total_alerts = alert_result[0]['count'] if alert_result else 0
+        # Get credential alerts count (not limited to 100)
+        credential_alert_query = """
+            SELECT COUNT(*) as count 
+            FROM alerts a
+            LEFT JOIN credentials c ON a.record_id = c.id AND a.record_type = 'credential'
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE a.status = 'new'
+        """
+        if country_filter:
+            credential_alert_query += " AND s.country = %s"
+        
+        credential_alert_result = execute_query(credential_alert_query, country_params)
+        credential_alerts = credential_alert_result[0]['count'] if credential_alert_result else 0
+        
+        # Get card alerts count (not limited to 100)
+        card_alert_query = """
+            SELECT COUNT(*) as count 
+            FROM card_alerts ca
+            LEFT JOIN cards c ON ca.card_id = c.id
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE ca.status = 'new'
+        """
+        if country_filter:
+            card_alert_query += " AND s.country = %s"
+            
+        card_alert_result = execute_query(card_alert_query, country_params)
+        card_alerts = card_alert_result[0]['count'] if card_alert_result else 0
+        
+        # Total alerts
+        total_alerts = credential_alerts + card_alerts
         
         return jsonify({
             'total_credentials': total_credentials,
             'total_cards': total_cards,
             'total_systems': total_systems,
-            'total_alerts': total_alerts
+            'total_alerts': total_alerts,
+            'alert_breakdown': {
+                'credential_alerts': credential_alerts,
+                'card_alerts': card_alerts
+            },
+            'country_filter': country_filter
         })
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
@@ -701,45 +761,107 @@ def get_stats():
 
 @app.route('/api/cards/search')
 def search_cards():
-    """Search cards with filters"""
+    """Search cards with filters, bank name filtering, and proper pagination"""
     try:
         # Get query parameters for filtering
         cardholder = request.args.get('cardholder')
         card_type = request.args.get('card_type')
         bin_number = request.args.get('bin_number')
+        bank_name = request.args.get('bank_name')  # New bank name filter
+        country = request.args.get('country')  # Add country filter support
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
-        limit = int(request.args.get('limit', 1000))
-        offset = int(request.args.get('offset', 0))
+        
+        # Pagination parameters with defaults
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 100))
+        
+        # Ensure per_page is exactly 100 as requested
+        per_page = 100
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Cap total results to 50,000 records
+        max_offset = 50000 - per_page
+        if offset > max_offset:
+            offset = max_offset
         
         # Build query with filters
         where_conditions = []
         params = []
         
         if cardholder:
-            where_conditions.append("LOWER(cardholder) LIKE %s")
+            where_conditions.append("LOWER(c.cardholder) LIKE %s")
             params.append(f'%{cardholder.lower()}%')
         
         if card_type:
-            where_conditions.append("LOWER(card_type) = %s")
+            where_conditions.append("LOWER(c.card_type) = %s")
             params.append(card_type.lower())
         
         if bin_number:
-            where_conditions.append("LEFT(number, 6) = %s")
+            where_conditions.append("LEFT(c.number, 6) = %s")
             params.append(bin_number)
         
+        if country:
+            where_conditions.append("s.country = %s")
+            params.append(country)
+        
         if date_from:
-            where_conditions.append("created_at >= %s")
+            where_conditions.append("c.created_at >= %s")
             params.append(date_from)
         
         if date_to:
-            where_conditions.append("created_at <= %s")
+            where_conditions.append("c.created_at <= %s")
             params.append(date_to + ' 23:59:59')
+        
+        # Bank name filtering using BIN lookup
+        bank_bin_filter = ""
+        if bank_name:
+            # Find BINs that match the bank name
+            matching_bins = []
+            for bin_num, bin_info in EGYPTIAN_BINS.items():
+                if bank_name.lower() in bin_info['issuer'].lower():
+                    matching_bins.append(bin_num)
+            
+            if matching_bins:
+                bin_placeholders = ','.join(['%s'] * len(matching_bins))
+                where_conditions.append(f"LEFT(c.number, 6) IN ({bin_placeholders})")
+                params.extend(matching_bins)
+            else:
+                # If no matching BINs found, return empty result
+                return jsonify({
+                    'results': [],
+                    'pagination': {
+                        'page': page,
+                        'per_page': per_page,
+                        'total_count': 0,
+                        'total_pages': 0,
+                        'has_next': False,
+                        'has_prev': False,
+                        'max_records': 50000
+                    }
+                })
         
         where_clause = ""
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
+        # Get total count for pagination info (limited to 50k)
+        count_query = f"""
+            SELECT COUNT(*) as total_count
+            FROM (
+                SELECT 1
+                FROM cards c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                {where_clause}
+                LIMIT 50000
+            ) as limited_results
+        """
+        count_result = execute_query(count_query, params)
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main search query
         query = f"""
             SELECT c.*, s.country, s.stealer_type, s.machine_user, s.ip
             FROM cards c
@@ -749,7 +871,7 @@ def search_cards():
             LIMIT %s OFFSET %s
         """
         
-        params.extend([limit, offset])
+        params.extend([per_page, offset])
         result = execute_query(query, params)
         
         # Add BIN information to each card
@@ -772,7 +894,23 @@ def search_cards():
                     if isinstance(value, datetime):
                         card[key] = value.isoformat()
         
-        return jsonify(result if result else [])
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev,
+                'max_records': 50000
+            }
+        })
     except Exception as e:
         logger.error(f"Error searching cards: {e}")
         return jsonify({'error': 'Failed to search cards'}), 500
@@ -929,17 +1067,111 @@ def get_card_stats():
         logger.error(f"Error getting card stats: {e}")
         return jsonify({'error': 'Failed to fetch card statistics'}), 500
 
+@app.route('/api/cards/egyptian')
+def get_egyptian_cards():
+    """Get Egyptian credit cards with pagination for dashboard"""
+    try:
+        # Pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 100))
+        
+        # Ensure per_page is exactly 100 as requested
+        per_page = 100
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Cap total results to 50,000 records
+        max_offset = 50000 - per_page
+        if offset > max_offset:
+            offset = max_offset
+        
+        # Get Egyptian BINs
+        egyptian_bins = tuple(EGYPTIAN_BINS.keys())
+        
+        # Get total count for pagination (limited to 50k)
+        count_query = """
+            SELECT COUNT(*) as total_count
+            FROM (
+                SELECT 1
+                FROM cards c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE LEFT(c.number, 6) IN %s
+                LIMIT 50000
+            ) as limited_results
+        """
+        count_result = execute_query(count_query, [egyptian_bins])
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main query for Egyptian cards
+        query = """
+            SELECT c.*, s.country, s.stealer_type, s.machine_user, s.ip
+            FROM cards c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            WHERE LEFT(c.number, 6) IN %s
+            ORDER BY c.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        
+        result = execute_query(query, [egyptian_bins, per_page, offset])
+        
+        # Add BIN information to each card
+        if result:
+            for card in result:
+                bin_info = get_bin_info(card['number'])
+                if bin_info:
+                    card['bin_info'] = bin_info
+                    card['egyptian_bank'] = bin_info['issuer']
+                    card['scheme'] = bin_info['scheme']
+                    card['is_egyptian'] = True
+                else:
+                    card['bin_info'] = None
+                    card['egyptian_bank'] = None
+                    card['scheme'] = 'Unknown'
+                    card['is_egyptian'] = False
+                
+                # Convert datetime objects to ISO strings
+                for key, value in card.items():
+                    if isinstance(value, datetime):
+                        card[key] = value.isoformat()
+        
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev,
+                'max_records': 50000
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting Egyptian cards: {e}")
+        return jsonify({'error': 'Failed to fetch Egyptian cards'}), 500
+
 @app.route('/api/card-alerts')
 def get_card_alerts():
-    """Get card alerts from database"""
+    """Get card alerts from database with no default limit"""
     try:
         # Get query parameters for filtering
         status_filter = request.args.get('status')
         severity_filter = request.args.get('severity')
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
+        
+        # Pagination parameters - no default limit, let frontend control
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 1000))  # Increased default
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
         
         # Check for new card matches before returning alerts
         check_card_watchlist_matches()
@@ -968,6 +1200,18 @@ def get_card_alerts():
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
+        # Get total count first
+        count_query = f"""
+            SELECT COUNT(*) as total_count
+            FROM card_alerts ca
+            LEFT JOIN card_watchlist cw ON ca.card_watchlist_id = cw.id
+            LEFT JOIN users u ON ca.reviewed_by = u.id
+            {where_clause}
+        """
+        count_result = execute_query(count_query, params)
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main query with pagination
         query = f"""
             SELECT 
                 ca.id, ca.card_watchlist_id, ca.matched_bin, ca.card_number,
@@ -983,7 +1227,7 @@ def get_card_alerts():
             LIMIT %s OFFSET %s
         """
         
-        params.extend([limit, offset])
+        params.extend([per_page, offset])
         result = execute_query(query, params)
         
         if result:
@@ -993,7 +1237,22 @@ def get_card_alerts():
                     if isinstance(value, datetime):
                         alert[key] = value.isoformat()
         
-        return jsonify(result if result else [])
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev
+            }
+        })
     except Exception as e:
         logger.error(f"Error getting card alerts: {e}")
         return jsonify({'error': 'Failed to fetch card alerts'}), 500
@@ -1046,15 +1305,20 @@ def mark_card_alert_false_positive(alert_id):
 
 @app.route('/api/alerts')
 def get_alerts():
-    """Get alerts from database with enhanced filtering"""
+    """Get alerts from database with enhanced filtering and no default limit"""
     try:
         # Get query parameters for filtering
         status_filter = request.args.get('status')
         severity_filter = request.args.get('severity')
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
+        
+        # Pagination parameters - no default limit, let frontend control
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 1000))  # Increased default
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
         
         # Check for new matches before returning alerts
         check_watchlist_matches()
@@ -1083,6 +1347,18 @@ def get_alerts():
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
+        # Get total count first
+        count_query = f"""
+            SELECT COUNT(*) as total_count
+            FROM alerts a
+            LEFT JOIN watchlist w ON a.watchlist_id = w.id
+            LEFT JOIN users u ON a.reviewed_by = u.id
+            {where_clause}
+        """
+        count_result = execute_query(count_query, params)
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main query with pagination
         query = f"""
             SELECT 
                 a.id, a.watchlist_id, a.matched_field, a.matched_value,
@@ -1098,7 +1374,7 @@ def get_alerts():
             LIMIT %s OFFSET %s
         """
         
-        params.extend([limit, offset])
+        params.extend([per_page, offset])
         result = execute_query(query, params)
         
         if result:
@@ -1108,7 +1384,22 @@ def get_alerts():
                     if isinstance(value, datetime):
                         alert[key] = value.isoformat()
         
-        return jsonify(result if result else [])
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev
+            }
+        })
     except Exception as e:
         logger.error(f"Error getting alerts: {e}")
         return jsonify({'error': 'Failed to fetch alerts'}), 500
@@ -1159,7 +1450,7 @@ def mark_false_positive(alert_id):
 
 @app.route('/api/credentials/search')
 def search_credentials():
-    """Search credentials with filters"""
+    """Search credentials with filters and proper pagination"""
     try:
         # Get query parameters for filtering
         domain = request.args.get('domain')
@@ -1168,8 +1459,21 @@ def search_credentials():
         country = request.args.get('country')
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
-        limit = int(request.args.get('limit', 1000))
-        offset = int(request.args.get('offset', 0))
+        
+        # Pagination parameters with defaults
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 100))
+        
+        # Ensure per_page is exactly 100 as requested
+        per_page = 100
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Cap total results to 50,000 records
+        max_offset = 50000 - per_page
+        if offset > max_offset:
+            offset = max_offset
         
         # Build query with filters
         where_conditions = []
@@ -1203,6 +1507,21 @@ def search_credentials():
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
+        # Get total count for pagination info (limited to 50k)
+        count_query = f"""
+            SELECT COUNT(*) as total_count
+            FROM (
+                SELECT 1
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                {where_clause}
+                LIMIT 50000
+            ) as limited_results
+        """
+        count_result = execute_query(count_query, params)
+        total_count = count_result[0]['total_count'] if count_result else 0
+        
+        # Main search query
         query = f"""
             SELECT c.*, s.country, s.computer_name, s.os_version, s.language
             FROM credentials c
@@ -1212,7 +1531,7 @@ def search_credentials():
             LIMIT %s OFFSET %s
         """
         
-        params.extend([limit, offset])
+        params.extend([per_page, offset])
         result = execute_query(query, params)
         
         if result:
@@ -1222,7 +1541,23 @@ def search_credentials():
                     if isinstance(value, datetime):
                         cred[key] = value.isoformat()
         
-        return jsonify(result if result else [])
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'results': result if result else [],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev,
+                'max_records': 50000
+            }
+        })
     except Exception as e:
         logger.error(f"Error searching credentials: {e}")
         return jsonify({'error': 'Failed to search credentials'}), 500
@@ -1298,17 +1633,34 @@ def get_country_stats():
 
 @app.route('/api/stats/stealers')
 def get_stealer_stats():
-    """Get stealer statistics"""
+    """Get stealer statistics with optional country filtering"""
     try:
-        query = """
-            SELECT stealer_type, COUNT(*) as count
-            FROM credentials
-            WHERE stealer_type IS NOT NULL
-            GROUP BY stealer_type
-            ORDER BY count DESC
-            LIMIT 20
-        """
-        result = execute_query(query)
+        # Get country filter from query parameters
+        country_filter = request.args.get('country')
+        
+        # Base query with optional country filter
+        if country_filter:
+            query = """
+                SELECT c.stealer_type, COUNT(*) as count
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE c.stealer_type IS NOT NULL AND s.country = %s
+                GROUP BY c.stealer_type
+                ORDER BY count DESC
+                LIMIT 20
+            """
+            result = execute_query(query, [country_filter])
+        else:
+            query = """
+                SELECT stealer_type, COUNT(*) as count
+                FROM credentials
+                WHERE stealer_type IS NOT NULL
+                GROUP BY stealer_type
+                ORDER BY count DESC
+                LIMIT 20
+            """
+            result = execute_query(query)
+        
         return jsonify(result if result else [])
     except Exception as e:
         logger.error(f"Error getting stealer stats: {e}")
@@ -1342,16 +1694,32 @@ def get_top_domains():
 
 @app.route('/api/stats/timeline')
 def get_timeline_stats():
-    """Get timeline statistics"""
+    """Get timeline statistics with optional country filtering"""
     try:
-        query = """
-            SELECT DATE(created_at) as date, COUNT(*) as count
-            FROM credentials
-            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
-            GROUP BY DATE(created_at)
-            ORDER BY date DESC
-        """
-        result = execute_query(query)
+        # Get country filter from query parameters
+        country_filter = request.args.get('country')
+        
+        # Base query with optional country filter
+        if country_filter:
+            query = """
+                SELECT DATE(c.created_at) as date, COUNT(*) as count
+                FROM credentials c
+                LEFT JOIN system_info s ON c.system_info_id = s.id
+                WHERE c.created_at >= CURRENT_DATE - INTERVAL '30 days'
+                AND s.country = %s
+                GROUP BY DATE(c.created_at)
+                ORDER BY date DESC
+            """
+            result = execute_query(query, [country_filter])
+        else:
+            query = """
+                SELECT DATE(created_at) as date, COUNT(*) as count
+                FROM credentials
+                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY DATE(created_at)
+                ORDER BY date DESC
+            """
+            result = execute_query(query)
         
         if result:
             # Convert dates to ISO strings
@@ -1434,10 +1802,360 @@ def delete_watchlist_item(item_id):
         logger.error(f"Error deleting watchlist item: {e}")
         return jsonify({'error': 'Failed to delete watchlist item'}), 500
 
+@app.route('/api/watchlist/bins', methods=['GET'])
+def get_bin_watchlist():
+    """Get BIN watchlist items"""
+    try:
+        query = """
+            SELECT cw.*, u.username as created_by_username
+            FROM card_watchlist cw
+            LEFT JOIN users u ON cw.created_by = u.id
+            ORDER BY cw.created_at DESC
+        """
+        result = execute_query(query)
+        
+        if result:
+            # Convert datetime objects to ISO strings
+            for item in result:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        return jsonify(result if result else [])
+    except Exception as e:
+        logger.error(f"Error getting BIN watchlist: {e}")
+        return jsonify({'error': 'Failed to fetch BIN watchlist'}), 500
+
+@app.route('/api/watchlist/bins', methods=['POST'])
+def create_bin_watchlist_item():
+    """Create a new BIN watchlist item"""
+    try:
+        data = request.get_json()
+        
+        query = """
+            INSERT INTO card_watchlist (bin_number, bank_name, country, severity, description, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING *
+        """
+        result = execute_query(query, [
+            data['bin_number'],
+            data.get('bank_name', ''),
+            data.get('country', 'EG'),
+            data.get('severity', 'medium'),
+            data.get('description', ''),
+            data.get('created_by', 1)
+        ])
+        
+        if result:
+            item = result[0]
+            # Convert datetime objects to ISO strings
+            for key, value in item.items():
+                if isinstance(value, datetime):
+                    item[key] = value.isoformat()
+            return jsonify(item)
+        else:
+            return jsonify({'error': 'Failed to create BIN watchlist item'}), 500
+    except Exception as e:
+        logger.error(f"Error creating BIN watchlist item: {e}")
+        return jsonify({'error': 'Failed to create BIN watchlist item'}), 500
+
+@app.route('/api/watchlist/bins/upload', methods=['POST'])
+def upload_bin_watchlist():
+    """Upload BIN watchlist from file or manual input"""
+    try:
+        # Handle both file upload and manual input
+        if 'file' in request.files:
+            # File upload
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected'}), 400
+            
+            if not file.filename.endswith('.txt'):
+                return jsonify({'error': 'Only .txt files are allowed'}), 400
+            
+            # Read file content
+            content = file.read().decode('utf-8')
+            lines = content.strip().split('\n')
+            
+        else:
+            # Manual input
+            data = request.get_json()
+            if not data or 'content' not in data:
+                return jsonify({'error': 'No content provided'}), 400
+            
+            content = data['content']
+            lines = content.strip().split('\n')
+        
+        # Parse lines - expect format: BIN,Scheme,Bank,Country
+        created_items = []
+        skipped_items = []
+        errors = []
+        
+        for i, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):  # Skip empty lines and comments
+                continue
+            
+            if i == 1 and line.lower().startswith('bin,'):  # Skip header line
+                continue
+            
+            try:
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) < 4:
+                    errors.append(f"Line {i}: Invalid format - expected BIN,Scheme,Bank,Country")
+                    continue
+                
+                bin_number, scheme, bank_name, country = parts[:4]
+                
+                # Validate BIN number
+                if not bin_number.isdigit() or len(bin_number) != 6:
+                    errors.append(f"Line {i}: Invalid BIN number - must be 6 digits")
+                    continue
+                
+                # Check if BIN already exists
+                check_query = "SELECT COUNT(*) as count FROM card_watchlist WHERE bin_number = %s"
+                check_result = execute_query(check_query, [bin_number])
+                if check_result and check_result[0]['count'] > 0:
+                    skipped_items.append(f"BIN {bin_number} already exists in watchlist")
+                    continue
+                
+                # Create watchlist item
+                insert_query = """
+                    INSERT INTO card_watchlist (bin_number, bank_name, country, severity, description, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                """
+                result = execute_query(insert_query, [
+                    bin_number,
+                    bank_name,
+                    country.upper(),
+                    'high',  # Default severity for uploaded BINs
+                    f"Uploaded BIN for {bank_name} ({scheme})",
+                    1  # Default user ID
+                ])
+                
+                if result:
+                    created_items.append(result[0])
+                else:
+                    errors.append(f"Line {i}: Failed to create watchlist item for BIN {bin_number}")
+                    
+            except Exception as e:
+                errors.append(f"Line {i}: Error processing line - {str(e)}")
+        
+        # Convert datetime objects to ISO strings in created items
+        for item in created_items:
+            for key, value in item.items():
+                if isinstance(value, datetime):
+                    item[key] = value.isoformat()
+        
+        return jsonify({
+            'success': True,
+            'created_count': len(created_items),
+            'skipped_count': len(skipped_items),
+            'error_count': len(errors),
+            'created_items': created_items,
+            'skipped_items': skipped_items,
+            'errors': errors
+        })
+        
+    except Exception as e:
+        logger.error(f"Error uploading BIN watchlist: {e}")
+        return jsonify({'error': 'Failed to upload BIN watchlist'}), 500
+
+@app.route('/api/watchlist/bins/<int:item_id>', methods=['DELETE'])
+def delete_bin_watchlist_item(item_id):
+    """Delete a BIN watchlist item"""
+    try:
+        query = "DELETE FROM card_watchlist WHERE id = %s"
+        result = execute_query(query, [item_id], fetch=False)
+        
+        if result and result > 0:
+            return jsonify({'message': 'BIN watchlist item deleted successfully'})
+        else:
+            return jsonify({'error': 'BIN watchlist item not found'}), 404
+    except Exception as e:
+        logger.error(f"Error deleting BIN watchlist item: {e}")
+        return jsonify({'error': 'Failed to delete BIN watchlist item'}), 500
+
+@app.route('/api/watchlist/stats')
+def get_watchlist_stats():
+    """Get watchlist statistics and alert counts"""
+    try:
+        # Get watchlist items with their alert counts
+        watchlist_stats_query = """
+            SELECT 
+                w.id, w.keyword, w.field_type, w.severity, w.description,
+                w.is_active, w.created_at,
+                COUNT(a.id) as alert_count,
+                COUNT(CASE WHEN a.status = 'new' THEN 1 END) as new_alerts,
+                COUNT(CASE WHEN a.status = 'reviewed' THEN 1 END) as reviewed_alerts,
+                COUNT(CASE WHEN a.status = 'false_positive' THEN 1 END) as false_positive_alerts
+            FROM watchlist w
+            LEFT JOIN alerts a ON w.id = a.watchlist_id
+            GROUP BY w.id, w.keyword, w.field_type, w.severity, w.description, w.is_active, w.created_at
+            ORDER BY alert_count DESC, w.created_at DESC
+        """
+        
+        watchlist_stats = execute_query(watchlist_stats_query)
+        
+        # Get BIN watchlist items with their alert counts
+        bin_watchlist_stats_query = """
+            SELECT 
+                cw.id, cw.bin_number, cw.bank_name, cw.country, cw.severity, 
+                cw.description, cw.is_active, cw.created_at,
+                COUNT(ca.id) as alert_count,
+                COUNT(CASE WHEN ca.status = 'new' THEN 1 END) as new_alerts,
+                COUNT(CASE WHEN ca.status = 'reviewed' THEN 1 END) as reviewed_alerts,
+                COUNT(CASE WHEN ca.status = 'false_positive' THEN 1 END) as false_positive_alerts
+            FROM card_watchlist cw
+            LEFT JOIN card_alerts ca ON cw.id = ca.card_watchlist_id
+            GROUP BY cw.id, cw.bin_number, cw.bank_name, cw.country, cw.severity, cw.description, cw.is_active, cw.created_at
+            ORDER BY alert_count DESC, cw.created_at DESC
+        """
+        
+        bin_watchlist_stats = execute_query(bin_watchlist_stats_query)
+        
+        # Get overall alert statistics
+        total_credential_alerts_query = "SELECT COUNT(*) as count FROM alerts"
+        total_card_alerts_query = "SELECT COUNT(*) as count FROM card_alerts"
+        
+        total_credential_alerts = execute_query(total_credential_alerts_query)
+        total_card_alerts = execute_query(total_card_alerts_query)
+        
+        credential_alert_count = total_credential_alerts[0]['count'] if total_credential_alerts else 0
+        card_alert_count = total_card_alerts[0]['count'] if total_card_alerts else 0
+        
+        # Convert datetime objects to ISO strings
+        if watchlist_stats:
+            for item in watchlist_stats:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        if bin_watchlist_stats:
+            for item in bin_watchlist_stats:
+                for key, value in item.items():
+                    if isinstance(value, datetime):
+                        item[key] = value.isoformat()
+        
+        return jsonify({
+            'watchlist_stats': watchlist_stats or [],
+            'bin_watchlist_stats': bin_watchlist_stats or [],
+            'total_stats': {
+                'total_credential_alerts': credential_alert_count,
+                'total_card_alerts': card_alert_count,
+                'total_alerts': credential_alert_count + card_alert_count,
+                'total_watchlist_items': len(watchlist_stats) if watchlist_stats else 0,
+                'total_bin_watchlist_items': len(bin_watchlist_stats) if bin_watchlist_stats else 0
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting watchlist stats: {e}")
+        return jsonify({'error': 'Failed to fetch watchlist statistics'}), 500
+
 @app.route('/api/export/credentials')
 def export_credentials():
-    """Export credentials (placeholder)"""
-    return jsonify({'error': 'Export functionality not implemented'}), 501
+    """Export credentials to CSV format"""
+    try:
+        # Get the same filters as search
+        domain = request.args.get('domain')
+        username = request.args.get('username')
+        stealer_type = request.args.get('stealer_type')
+        country = request.args.get('country')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        
+        # Build query with filters (same logic as search)
+        where_conditions = []
+        params = []
+        
+        if domain:
+            where_conditions.append("(LOWER(c.domain) LIKE %s OR LOWER(c.url) LIKE %s)")
+            params.extend([f'%{domain.lower()}%', f'%{domain.lower()}%'])
+        
+        if username:
+            where_conditions.append("LOWER(c.username) LIKE %s")
+            params.append(f'%{username.lower()}%')
+        
+        if stealer_type:
+            where_conditions.append("c.stealer_type = %s")
+            params.append(stealer_type)
+        
+        if country:
+            where_conditions.append("s.country = %s")
+            params.append(country)
+        
+        if date_from:
+            where_conditions.append("c.created_at >= %s")
+            params.append(date_from)
+        
+        if date_to:
+            where_conditions.append("c.created_at <= %s")
+            params.append(date_to + ' 23:59:59')
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # Query for export (limit to 10,000 records for performance)
+        query = f"""
+            SELECT 
+                c.id, c.domain, c.url, c.username, c.password,
+                c.stealer_type, c.created_at,
+                s.country, s.computer_name, s.os_version, s.machine_user, s.ip
+            FROM credentials c
+            LEFT JOIN system_info s ON c.system_info_id = s.id
+            {where_clause}
+            ORDER BY c.created_at DESC
+            LIMIT 10000
+        """
+        
+        result = execute_query(query, params)
+        
+        if not result:
+            return jsonify({'error': 'No data found to export'}), 404
+        
+        # Create CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            'ID', 'Domain', 'URL', 'Username', 'Password', 
+            'Stealer Type', 'Created Date', 'Country', 
+            'Computer Name', 'OS Version', 'Machine User', 'IP'
+        ])
+        
+        # Write data rows
+        for row in result:
+            writer.writerow([
+                row.get('id', ''),
+                row.get('domain', ''),
+                row.get('url', ''),
+                row.get('username', ''),
+                row.get('password', ''),
+                row.get('stealer_type', ''),
+                row.get('created_at', '').isoformat() if row.get('created_at') else '',
+                row.get('country', ''),
+                row.get('computer_name', ''),
+                row.get('os_version', ''),
+                row.get('machine_user', ''),
+                row.get('ip', '')
+            ])
+        
+        # Create response
+        csv_data = output.getvalue()
+        output.close()
+        
+        response = make_response(csv_data)
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename=credentials_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error exporting credentials: {e}")
+        return jsonify({'error': 'Failed to export credentials'}), 500
 
 @app.route('/api/health')
 def health_check():

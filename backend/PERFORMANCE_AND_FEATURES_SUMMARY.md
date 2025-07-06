@@ -11,18 +11,21 @@ The main dashboard was getting stuck for 2-3 minutes because API endpoints were 
 These functions iterate through all watchlist items and check for matches, which is very slow and blocks the API response.
 
 ### Solution ✅
-**Made watchlist checks optional and non-blocking:**
-- Removed automatic watchlist checks from all alert endpoints
-- Added optional parameter `?check_matches=true` to trigger checks only when needed
-- Dashboard now loads instantly without waiting for watchlist processing
+**Implemented intelligent automatic watchlist triggering:**
+- Removed blocking watchlist checks from all alert endpoints
+- Created database triggers to detect new data in credentials, cards, and system_info tables
+- Automatic watchlist checks run only when new data is actually added
+- Dashboard loads instantly and watchlist checks happen intelligently in background
 
-### Usage
+### How It Works
 ```bash
-# Fast loading (default) - no watchlist check
-GET /api/card-alerts
+# Database triggers automatically detect new data
+INSERT INTO credentials -> Triggers credential watchlist check
+INSERT INTO cards -> Triggers card watchlist check  
+INSERT INTO system_info -> Triggers credential watchlist check
 
-# Manual trigger - only when needed
-GET /api/card-alerts?check_matches=true
+# API endpoints now check for new data and run watchlist only if needed
+GET /api/card-alerts -> Automatically checks for new data and runs watchlist if needed
 ```
 
 ## 🔧 New Feature - Bulk Watchlist Upload
@@ -89,10 +92,30 @@ admin,username,critical,Admin username monitoring
 }
 ```
 
+## 🤖 Automatic Watchlist System
+
+### Database Triggers
+- **data_change_tracker** table tracks last insert time for each monitored table
+- **Triggers** automatically update tracking when new data is inserted:
+  - `credential_insert_trigger` - monitors credentials table
+  - `card_insert_trigger` - monitors cards table  
+  - `system_insert_trigger` - monitors system_info table
+
+### Smart Detection
+- `check_for_new_data_and_run_watchlist()` function checks for new data
+- Only runs watchlist checks if new data detected since last check
+- Thread-safe with proper locking to prevent race conditions
+
+### New Maintenance Endpoints
+- **GET** `/api/maintenance/data-change-status` - View tracking status
+- **POST** `/api/maintenance/reset-watchlist-triggers` - Reset timestamps
+- **POST** `/api/maintenance/force-watchlist-check` - Manual trigger (updated)
+
 ## 📊 Performance Impact
 - **Before**: Dashboard loading took 2-3 minutes due to blocking watchlist checks
-- **After**: Dashboard loads instantly, watchlist checks only run when explicitly requested
-- **Maintenance**: Manual watchlist checks still available via `/api/maintenance/force-watchlist-check`
+- **After**: Dashboard loads instantly, watchlist checks only run when new data exists
+- **Intelligence**: No unnecessary processing - checks only triggered by actual new data
+- **Maintenance**: Manual controls and monitoring available via API endpoints
 
 ## 🔧 Technical Changes
 
@@ -102,12 +125,19 @@ admin,username,critical,Admin username monitoring
 
 ### Endpoints Changed
 1. **Performance Fixes:**
-   - `/api/card-alerts` - Made watchlist check optional
-   - `/api/alerts` - Made watchlist check optional  
-   - `/api/alerts/optimized` - Made watchlist check optional
+   - `/api/card-alerts` - Now uses automatic data change detection
+   - `/api/alerts` - Now uses automatic data change detection  
+   - `/api/alerts/optimized` - Now uses automatic data change detection
 
 2. **New Endpoints:**
    - `/api/watchlist/upload` - Bulk upload for regular watchlist
+   - `/api/maintenance/data-change-status` - Monitor automatic trigger status
+   - `/api/maintenance/reset-watchlist-triggers` - Reset trigger timestamps
+
+3. **Database Changes:**
+   - `data_change_tracker` table created
+   - Database triggers for automatic detection
+   - Thread-safe global tracking variables
 
 ### Backward Compatibility
 ✅ **Fully backward compatible** - existing API calls work exactly the same, just faster.

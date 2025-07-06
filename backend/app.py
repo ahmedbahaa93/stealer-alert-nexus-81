@@ -10,6 +10,8 @@ import os
 import sys
 import csv
 import io
+import threading
+import time
 
 app = Flask(__name__)
 CORS(app, origins=["*"])
@@ -119,6 +121,11 @@ EGYPTIAN_BINS = {
     '457376': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'NATIONAL BANK OF EGYPT', 'country': 'EG'},
     '457338': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
 }
+
+# Global flag to track when new data is added
+last_credential_check = datetime.now()
+last_card_check = datetime.now() 
+watchlist_check_lock = threading.Lock()
 
 def test_connection():
     """Test database connection"""
@@ -1435,9 +1442,8 @@ def get_card_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Optional: Check for new card matches (only if requested)
-        if request.args.get('check_matches') == 'true':
-            check_card_watchlist_matches()
+        # Automatically check for new card matches if there's new data
+        check_for_new_data_and_run_watchlist()
         
         # Build query with filters
         where_conditions = []
@@ -1583,9 +1589,8 @@ def get_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Optional: Check for new matches (only if requested)
-        if request.args.get('check_matches') == 'true':
-            check_watchlist_matches()
+        # Automatically check for new credential matches if there's new data
+        check_for_new_data_and_run_watchlist()
         
         # Build query with filters
         where_conditions = []
@@ -1686,9 +1691,8 @@ def get_optimized_alerts():
         # Calculate offset
         offset = (page - 1) * per_page
         
-        # Optional: Check for new matches (only if requested)
-        if request.args.get('check_matches') == 'true':
-            check_watchlist_matches()
+        # Automatically check for new credential matches if there's new data
+        check_for_new_data_and_run_watchlist()
         
         # Build query with filters using the optimized table
         where_conditions = []
@@ -3155,6 +3159,7 @@ def force_watchlist_check():
         
         # Run watchlist matching
         check_watchlist_matches()
+        check_card_watchlist_matches()
         
         return jsonify({
             'success': True,
@@ -3165,6 +3170,80 @@ def force_watchlist_check():
     except Exception as e:
         logger.error(f"Error in force watchlist check: {e}")
         return jsonify({'error': 'Failed to run watchlist check'}), 500
+
+@app.route('/api/maintenance/data-change-status')
+def get_data_change_status():
+    """Get status of data changes for automatic watchlist triggering"""
+    try:
+        global last_credential_check, last_card_check
+        
+        # Get tracking data from database
+        query = """
+            SELECT table_name, last_insert, insert_count 
+            FROM data_change_tracker 
+            WHERE table_name IN ('credentials', 'cards', 'system_info')
+            ORDER BY table_name
+        """
+        tracking_data = execute_query(query)
+        
+        # Convert datetime objects to ISO strings
+        if tracking_data:
+            for item in tracking_data:
+                if item.get('last_insert'):
+                    item['last_insert'] = item['last_insert'].isoformat()
+        
+        return jsonify({
+            'tracking_data': tracking_data or [],
+            'last_checks': {
+                'credential_check': last_credential_check.isoformat(),
+                'card_check': last_card_check.isoformat()
+            },
+            'auto_trigger_enabled': True,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting data change status: {e}")
+        return jsonify({'error': 'Failed to get data change status'}), 500
+
+@app.route('/api/maintenance/reset-watchlist-triggers', methods=['POST'])
+def reset_watchlist_triggers():
+    """Reset watchlist trigger timestamps"""
+    try:
+        global last_credential_check, last_card_check
+        
+        # Check authentication (in production, add proper auth)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or 'admin' not in auth_header.lower():
+            return jsonify({'error': 'Admin access required'}), 403
+        
+        # Reset global timestamps
+        last_credential_check = datetime.now()
+        last_card_check = datetime.now()
+        
+        # Optionally reset database tracking
+        data = request.get_json() or {}
+        if data.get('reset_database_tracking', False):
+            reset_query = """
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP
+                WHERE table_name IN ('credentials', 'cards', 'system_info')
+            """
+            execute_query(reset_query, fetch=False)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Watchlist triggers reset successfully',
+            'new_timestamps': {
+                'credential_check': last_credential_check.isoformat(),
+                'card_check': last_card_check.isoformat()
+            },
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting watchlist triggers: {e}")
+        return jsonify({'error': 'Failed to reset watchlist triggers'}), 500
 
 @app.route('/api/maintenance/fix-schema', methods=['POST'])
 def fix_database_schema():
@@ -3251,6 +3330,172 @@ def fix_database_schema():
         logger.error(f"Error in schema fix endpoint: {e}")
         return jsonify({'error': f'Failed to fix schema: {str(e)}'}), 500
 
+def create_data_triggers():
+    """Create database triggers to track when new data is added"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        
+        cursor = conn.cursor()
+        
+        # Create a table to track data changes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS data_change_tracker (
+                id SERIAL PRIMARY KEY,
+                table_name VARCHAR(50) NOT NULL,
+                last_insert TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                insert_count INTEGER DEFAULT 0
+            )
+        """)
+        
+        # Initialize tracking records for each table
+        tables_to_track = ['credentials', 'cards', 'system_info']
+        for table in tables_to_track:
+            cursor.execute("""
+                INSERT INTO data_change_tracker (table_name, last_insert, insert_count)
+                SELECT %s, CURRENT_TIMESTAMP, 0
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM data_change_tracker WHERE table_name = %s
+                )
+            """, [table, table])
+        
+        # Create triggers for credentials table
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_credential_tracker()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP, insert_count = insert_count + 1
+                WHERE table_name = 'credentials';
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS credential_insert_trigger ON credentials;
+            CREATE TRIGGER credential_insert_trigger
+                AFTER INSERT ON credentials
+                FOR EACH ROW
+                EXECUTE FUNCTION update_credential_tracker();
+        """)
+        
+        # Create triggers for cards table
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_card_tracker()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP, insert_count = insert_count + 1
+                WHERE table_name = 'cards';
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS card_insert_trigger ON cards;
+            CREATE TRIGGER card_insert_trigger
+                AFTER INSERT ON cards
+                FOR EACH ROW
+                EXECUTE FUNCTION update_card_tracker();
+        """)
+        
+        # Create triggers for system_info table
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_system_tracker()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP, insert_count = insert_count + 1
+                WHERE table_name = 'system_info';
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS system_insert_trigger ON system_info;
+            CREATE TRIGGER system_insert_trigger
+                AFTER INSERT ON system_info
+                FOR EACH ROW
+                EXECUTE FUNCTION update_system_tracker();
+        """)
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info("✓ Database triggers created successfully for automatic watchlist checking")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating data triggers: {e}")
+        return False
+
+def check_for_new_data_and_run_watchlist():
+    """Check if there's new data and run watchlist checks if needed"""
+    global last_credential_check, last_card_check
+    
+    try:
+        with watchlist_check_lock:
+            # Get last insert times from database
+            query = """
+                SELECT table_name, last_insert, insert_count 
+                FROM data_change_tracker 
+                WHERE table_name IN ('credentials', 'cards', 'system_info')
+            """
+            results = execute_query(query)
+            
+            if not results:
+                logger.warning("No data change tracking found - triggers may not be set up")
+                return False
+            
+            new_credentials = False
+            new_cards = False
+            
+            for result in results:
+                table_name = result['table_name']
+                last_insert = result['last_insert']
+                insert_count = result['insert_count']
+                
+                if table_name in ['credentials', 'system_info']:
+                    if last_insert > last_credential_check:
+                        new_credentials = True
+                        logger.info(f"New {table_name} data detected - last insert: {last_insert}")
+                
+                elif table_name == 'cards':
+                    if last_insert > last_card_check:
+                        new_cards = True
+                        logger.info(f"New cards data detected - last insert: {last_insert}")
+            
+            # Run appropriate watchlist checks
+            alerts_created = 0
+            
+            if new_credentials:
+                logger.info("🔄 Running credential watchlist check due to new data...")
+                try:
+                    check_watchlist_matches()
+                    last_credential_check = datetime.now()
+                    logger.info("✓ Credential watchlist check completed")
+                except Exception as e:
+                    logger.error(f"Error in credential watchlist check: {e}")
+            
+            if new_cards:
+                logger.info("🔄 Running card watchlist check due to new data...")
+                try:
+                    check_card_watchlist_matches()
+                    last_card_check = datetime.now()
+                    logger.info("✓ Card watchlist check completed")
+                except Exception as e:
+                    logger.error(f"Error in card watchlist check: {e}")
+            
+            return new_credentials or new_cards
+            
+    except Exception as e:
+        logger.error(f"Error checking for new data: {e}")
+        return False
+
 # Initialize database only once in main process
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     print("✓ Running in reloader main process")
@@ -3262,6 +3507,12 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         if create_missing_tables():
             print("\n✓ Database setup completed successfully!")
             verify_tables()
+            
+            # Create data change tracking triggers
+            if create_data_triggers():
+                print("✓ Automatic watchlist triggers created successfully!")
+            else:
+                print("⚠ Warning: Could not create automatic watchlist triggers")
             
             # Auto-populate credential alert details on startup
             print("\n🔄 Checking credential alert details optimization...")
@@ -3389,6 +3640,12 @@ if __name__ == '__main__':
         # Create missing tables
         if create_missing_tables():
             print("\n✓ Database setup completed successfully!")
+            
+            # Create data change tracking triggers
+            if create_data_triggers():
+                print("✓ Automatic watchlist triggers created successfully!")
+            else:
+                print("⚠ Warning: Could not create automatic watchlist triggers")
             
             # Verify everything is working
             verify_tables()

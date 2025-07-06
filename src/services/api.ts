@@ -1,3 +1,4 @@
+
 // Enhanced API service to match FastAPI backend
 export interface SystemInfo {
   id: number;
@@ -33,6 +34,9 @@ export interface Credential {
   system_info_id?: number;
   created_at: string;
   system_info?: SystemInfo;
+  country?: string;
+  computer_name?: string;
+  os_version?: string;
 }
 
 export interface Card {
@@ -87,6 +91,10 @@ export interface Alert {
   created_at: string;
   reviewed_by?: string;
   reviewed_at?: string;
+  keyword?: string;
+  description?: string;
+  field_type?: string;
+  reviewed_by_username?: string;
 }
 
 export interface CardAlert {
@@ -101,6 +109,9 @@ export interface CardAlert {
   created_at: string;
   reviewed_by?: string;
   reviewed_at?: string;
+  bin_number?: string;
+  description?: string;
+  reviewed_by_username?: string;
 }
 
 export interface Watchlist {
@@ -112,18 +123,22 @@ export interface Watchlist {
   is_active: boolean;
   created_at: string;
   created_by?: string;
+  updated_at?: string;
+  created_by_username?: string;
 }
 
 export interface BinWatchlist {
   id: number;
   bin_number: string;
-  scheme: string;
+  scheme?: string;
   bank_name: string;
   country: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   is_active: boolean;
   created_at: string;
   created_by?: string;
+  description?: string;
+  created_by_username?: string;
 }
 
 export interface DashboardStats {
@@ -131,6 +146,11 @@ export interface DashboardStats {
   total_cards: number;
   total_systems: number;
   total_alerts: number;
+  alert_breakdown?: {
+    credential_alerts: number;
+    card_alerts: number;
+  };
+  country_filter?: string;
 }
 
 export interface CardStats {
@@ -173,8 +193,6 @@ export interface SearchFilters {
   date_to?: string;
   page?: number;
   per_page?: number;
-  limit?: number;
-  offset?: number;
 }
 
 export interface CardSearchFilters {
@@ -187,8 +205,6 @@ export interface CardSearchFilters {
   date_to?: string;
   page?: number;
   per_page?: number;
-  limit?: number;
-  offset?: number;
 }
 
 export interface PaginatedResponse<T> {
@@ -472,7 +488,7 @@ export class ApiService {
   }
 
   async getBinWatchlist(): Promise<BinWatchlist[]> {
-    const response = await fetch(`${this.baseUrl}/bin-watchlist`, {
+    const response = await fetch(`${this.baseUrl}/watchlist/bins`, {
       headers: this.getHeaders(),
     });
     
@@ -484,7 +500,7 @@ export class ApiService {
   }
 
   async createBinWatchlistItem(item: Partial<BinWatchlist>): Promise<BinWatchlist> {
-    const response = await fetch(`${this.baseUrl}/bin-watchlist`, {
+    const response = await fetch(`${this.baseUrl}/watchlist/bins`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(item),
@@ -501,7 +517,7 @@ export class ApiService {
     const formData = new FormData();
     formData.append('file', file);
     
-    const response = await fetch(`${this.baseUrl}/bin-watchlist/upload`, {
+    const response = await fetch(`${this.baseUrl}/watchlist/bins/upload`, {
       method: 'POST',
       headers: {
         'Authorization': this.token ? `Bearer ${this.token}` : '',
@@ -517,7 +533,7 @@ export class ApiService {
   }
 
   async deleteBinWatchlistItem(id: number): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/bin-watchlist/${id}`, {
+    const response = await fetch(`${this.baseUrl}/watchlist/bins/${id}`, {
       method: 'DELETE',
       headers: this.getHeaders(),
     });

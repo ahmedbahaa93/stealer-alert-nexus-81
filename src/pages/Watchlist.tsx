@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -281,7 +282,7 @@ export const Watchlist = () => {
                       {binWatchlistItems.map((item) => (
                         <TableRow key={item.id} className="border-gray-800">
                           <TableCell className="text-white font-mono">{item.bin_number}</TableCell>
-                          <TableCell className="text-gray-300">{item.scheme}</TableCell>
+                          <TableCell className="text-gray-300">{item.scheme || 'N/A'}</TableCell>
                           <TableCell className="text-gray-300">{item.bank_name}</TableCell>
                           <TableCell className="text-gray-300">{item.country}</TableCell>
                           <TableCell>

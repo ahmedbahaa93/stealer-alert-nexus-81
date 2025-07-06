@@ -1,6 +1,6 @@
 
 import { EnhancedAlertsPanel } from "@/components/EnhancedAlertsPanel";
-import { AlertCircle, Database, CreditCard, Clock, Shield, User, Calendar } from "lucide-react";
+import { AlertCircle, Database, CreditCard, Clock, Shield, User, Calendar, Globe, Building2, Hash } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,7 +56,7 @@ export const DashboardAlerts = ({
     <div>
       <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
         <AlertCircle className="h-6 w-6 text-red-400" />
-        Recent Security Alerts - Full Details
+        Recent Security Alerts - Detailed Information
         <div className="flex items-center gap-4 ml-auto text-sm">
           <div className="flex items-center gap-2 px-3 py-1 bg-blue-900/30 rounded-full">
             <Database className="h-4 w-4 text-blue-400" />
@@ -73,19 +73,19 @@ export const DashboardAlerts = ({
         <div className="h-96 bg-gray-800 rounded animate-pulse"></div>
       ) : (
         <div className="space-y-6">
-          {/* Credential Alerts - Full Details */}
+          {/* Credential Alerts - Enhanced Details */}
           {alerts && alerts.length > 0 && (
             <Card className="bg-gray-900 border-gray-700">
               <CardHeader>
                 <CardTitle className="text-white flex items-center gap-2">
                   <Database className="h-5 w-5 text-blue-400" />
-                  Credential Alerts
+                  Credential Alerts - Complete Details
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {alerts.slice(0, 5).map((alert) => (
-                  <div key={alert.id} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-                    <div className="flex items-start justify-between mb-3">
+                  <div key={alert.id} className="bg-gray-800/50 rounded-lg p-6 border border-gray-700">
+                    <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Badge className={getSeverityColor(alert.severity)}>
                           {alert.severity?.toUpperCase() || 'UNKNOWN'}
@@ -100,48 +100,81 @@ export const DashboardAlerts = ({
                       </div>
                     </div>
                     
+                    {/* Primary Alert Information */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <p className="text-gray-400 text-sm">Matched Field</p>
-                        <p className="text-white font-medium">{alert.matched_field}: {alert.matched_value}</p>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 text-red-400" />
+                          <span className="text-gray-400 text-sm">Alert Details</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Matched Field</p>
+                          <p className="text-white font-medium">{alert.matched_field}: {alert.matched_value}</p>
+                          <p className="text-gray-400 text-sm mt-1">Watchlist Keyword</p>
+                          <p className="text-blue-400">{alert.keyword || 'N/A'}</p>
+                          <p className="text-gray-400 text-sm mt-1">Description</p>
+                          <p className="text-gray-300">{alert.description || 'No description available'}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Domain</p>
-                        <p className="text-blue-400">{alert.domain || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Username</p>
-                        <p className="text-gray-300">{alert.credential_username || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Stealer Type</p>
-                        <p className="text-gray-300">{alert.stealer_type || 'Unknown'}</p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Globe className="h-4 w-4 text-blue-400" />
+                          <span className="text-gray-400 text-sm">Domain Information</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Matched Domain</p>
+                          <p className="text-blue-400 font-medium">{alert.domain || alert.matched_value}</p>
+                          <p className="text-gray-400 text-sm mt-1">Username</p>
+                          <p className="text-gray-300">{alert.credential_username || 'N/A'}</p>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 pt-3 border-t border-gray-600">
-                      <div className="flex items-center gap-2">
-                        <Shield className="h-4 w-4 text-gray-400" />
-                        <div>
-                          <p className="text-gray-400 text-sm">System Country</p>
+                    {/* System Information */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 pt-4 border-t border-gray-600">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Shield className="h-4 w-4 text-green-400" />
+                          <span className="text-gray-400 text-sm">System Details</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Country</p>
                           <p className="text-gray-300">{alert.system_country || 'Unknown'}</p>
+                          <p className="text-gray-400 text-sm mt-1">IP Address</p>
+                          <p className="text-gray-300 font-mono">{alert.system_ip || 'N/A'}</p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-400" />
-                        <div>
-                          <p className="text-gray-400 text-sm">Computer</p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <User className="h-4 w-4 text-purple-400" />
+                          <span className="text-gray-400 text-sm">Machine Info</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Computer Name</p>
                           <p className="text-gray-300">{alert.computer_name || 'Unknown'}</p>
+                          <p className="text-gray-400 text-sm mt-1">Machine User</p>
+                          <p className="text-gray-300">{alert.machine_user || 'N/A'}</p>
                         </div>
                       </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">System IP</p>
-                        <p className="text-gray-300 font-mono">{alert.system_ip || 'N/A'}</p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Database className="h-4 w-4 text-orange-400" />
+                          <span className="text-gray-400 text-sm">Stealer Info</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Stealer Type</p>
+                          <p className="text-gray-300">{alert.stealer_type || 'Unknown'}</p>
+                          <p className="text-gray-400 text-sm mt-1">OS Version</p>
+                          <p className="text-gray-300">{alert.os_version || 'N/A'}</p>
+                        </div>
                       </div>
                     </div>
 
                     {alert.status === 'new' && (
-                      <div className="flex gap-2 pt-3 border-t border-gray-600">
+                      <div className="flex gap-2 pt-4 border-t border-gray-600">
                         <Button
                           size="sm"
                           variant="outline"
@@ -166,19 +199,19 @@ export const DashboardAlerts = ({
             </Card>
           )}
 
-          {/* Card Alerts - Full Details */}
+          {/* Card Alerts - Enhanced Details */}
           {cardAlerts && cardAlerts.length > 0 && (
             <Card className="bg-gray-900 border-gray-700">
               <CardHeader>
                 <CardTitle className="text-white flex items-center gap-2">
                   <CreditCard className="h-5 w-5 text-green-400" />
-                  Card Alerts
+                  Card Alerts - Complete Details
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {cardAlerts.slice(0, 5).map((alert) => (
-                  <div key={alert.id} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-                    <div className="flex items-start justify-between mb-3">
+                  <div key={alert.id} className="bg-gray-800/50 rounded-lg p-6 border border-gray-700">
+                    <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Badge className={getSeverityColor(alert.severity)}>
                           {alert.severity?.toUpperCase() || 'UNKNOWN'}
@@ -193,29 +226,57 @@ export const DashboardAlerts = ({
                       </div>
                     </div>
                     
+                    {/* Primary Card Alert Information */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <p className="text-gray-400 text-sm">Matched BIN</p>
-                        <p className="text-white font-mono font-medium">{alert.matched_bin}</p>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Hash className="h-4 w-4 text-blue-400" />
+                          <span className="text-gray-400 text-sm">BIN Information</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Matched BIN</p>
+                          <p className="text-white font-mono font-medium">{alert.matched_bin || alert.bin_number}</p>
+                          <p className="text-gray-400 text-sm mt-1">Card Number</p>
+                          <p className="text-gray-300 font-mono">
+                            {alert.card_number ? `${alert.card_number.slice(0, 4)}****${alert.card_number.slice(-4)}` : 'N/A'}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Bank Name</p>
-                        <p className="text-green-400">{alert.bank_name}</p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-green-400" />
+                          <span className="text-gray-400 text-sm">Bank Information</span>
+                        </div>
+                        <div className="pl-6">
+                          <p className="text-gray-400 text-sm">Bank Name</p>
+                          <p className="text-green-400 font-medium">{alert.bank_name}</p>
+                          <p className="text-gray-400 text-sm mt-1">Description</p>
+                          <p className="text-gray-300">{alert.description || 'Monitor bank cards'}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Card Number</p>
-                        <p className="text-gray-300 font-mono">
-                          {alert.card_number ? `${alert.card_number.slice(0, 4)}****${alert.card_number.slice(-4)}` : 'N/A'}
-                        </p>
+                    </div>
+
+                    {/* Watchlist Information */}
+                    <div className="pt-4 border-t border-gray-600">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertCircle className="h-4 w-4 text-yellow-400" />
+                        <span className="text-gray-400 text-sm">Watchlist Alert Details</span>
                       </div>
-                      <div>
-                        <p className="text-gray-400 text-sm">Description</p>
-                        <p className="text-gray-300">{alert.description || 'N/A'}</p>
+                      <div className="pl-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-gray-400 text-sm">Watchlist ID</p>
+                          <p className="text-gray-300">{alert.card_watchlist_id || 'N/A'}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400 text-sm">Card ID</p>
+                          <p className="text-gray-300">{alert.card_id || 'N/A'}</p>
+                        </div>
                       </div>
                     </div>
 
                     {alert.status === 'new' && (
-                      <div className="flex gap-2 pt-3 border-t border-gray-600">
+                      <div className="flex gap-2 pt-4 border-t border-gray-600">
                         <Button
                           size="sm"
                           variant="outline"

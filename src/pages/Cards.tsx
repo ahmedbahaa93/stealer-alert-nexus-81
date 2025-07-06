@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -170,16 +170,15 @@ export const Cards = () => {
     console.log('Filtered to cards with alerts:', filteredCards.length);
   }
 
-  const pagination = cardsResponse?.pagination;
-  
-  const hasNextPage = pagination?.has_next || false;
-  const hasPrevPage = pagination?.has_prev || false;
-  const totalPages = pagination?.total_pages || 1;
-  
   const egyptianCards = filteredCards.filter(card => card.is_egyptian);
   const uniqueBanks = new Set(egyptianCards.map(card => card.egyptian_bank).filter(Boolean));
   const alertCardIds = cardAlerts ? new Set(cardAlerts.map(alert => alert.card_id)) : new Set();
   const cardsWithAlerts = filteredCards.filter(card => alertCardIds.has(card.id));
+
+  const pagination = cardsResponse?.pagination;
+  const hasNextPage = pagination?.has_next || false;
+  const hasPrevPage = pagination?.has_prev || false;
+  const totalPages = pagination?.total_pages || 1;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 p-6 animate-fade-in">
@@ -210,7 +209,7 @@ export const Cards = () => {
           <Card className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border-blue-800">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-blue-100">
-                Current Page Cards
+                Filtered Results
               </CardTitle>
               <CreditCard className="h-4 w-4 text-blue-400" />
             </CardHeader>
@@ -219,7 +218,7 @@ export const Cards = () => {
                 {filteredCards.length.toLocaleString()}
               </div>
               <p className="text-xs text-blue-200">
-                Showing on page {currentPage} of {totalPages}
+                Cards after filtering (page {currentPage})
               </p>
             </CardContent>
           </Card>
@@ -236,7 +235,7 @@ export const Cards = () => {
                 {egyptianCards.length.toLocaleString()}
               </div>
               <p className="text-xs text-red-200">
-                From Egyptian banks
+                From Egyptian banks (filtered)
               </p>
             </CardContent>
           </Card>
@@ -253,7 +252,7 @@ export const Cards = () => {
                 {uniqueBanks.size}
               </div>
               <p className="text-xs text-green-200">
-                Egyptian banks affected (current page)
+                Egyptian banks affected (filtered)
               </p>
             </CardContent>
           </Card>
@@ -270,7 +269,7 @@ export const Cards = () => {
                 {cardsWithAlerts.length.toLocaleString()}
               </div>
               <p className="text-xs text-purple-200">
-                Cards with alerts (current page)
+                Cards with alerts (filtered)
               </p>
             </CardContent>
           </Card>
@@ -316,7 +315,7 @@ export const Cards = () => {
                   onCheckedChange={handleEgyptianOnlyChange}
                 />
                 <label htmlFor="egyptian-only" className="text-sm text-gray-300 cursor-pointer">
-                  Show only Egyptian cards
+                  Show only Egyptian cards ({egyptianCards.length} found)
                 </label>
               </div>
               <div className="flex items-center space-x-2">
@@ -326,7 +325,7 @@ export const Cards = () => {
                   onCheckedChange={handleAlertsOnlyChange}
                 />
                 <label htmlFor="alerts-only" className="text-sm text-gray-300 cursor-pointer">
-                  Show only cards with alerts
+                  Show only cards with alerts ({cardsWithAlerts.length} found)
                 </label>
               </div>
             </div>
@@ -414,7 +413,7 @@ export const Cards = () => {
                 </Button>
               </div>
               <div className="text-gray-400 text-sm">
-                Current Page: <span className="text-white font-semibold">{filteredCards.length}</span> cards | 
+                Filtered Results: <span className="text-white font-semibold">{filteredCards.length}</span> cards | 
                 Total Available: <span className="text-blue-400 font-semibold">{totalCards.toLocaleString()}</span> |
                 Egyptian: <span className="text-red-400 font-semibold">{egyptianCards.length}</span> |
                 With Alerts: <span className="text-purple-400 font-semibold">{cardsWithAlerts.length}</span>

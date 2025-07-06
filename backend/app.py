@@ -2131,7 +2131,13 @@ def get_top_domains():
                 COUNT(*) as count
             FROM credentials
             WHERE domain IS NOT NULL OR url IS NOT NULL
-            GROUP BY domain
+            GROUP BY COALESCE(domain, 
+                    CASE 
+                        WHEN url LIKE 'http%' THEN 
+                            SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
+                        ELSE url 
+                    END
+                )
             ORDER BY count DESC
             LIMIT 50
         """
@@ -2668,7 +2674,13 @@ def get_comprehensive_dashboard():
                 FROM credentials c
                 LEFT JOIN system_info s ON c.system_info_id = s.id
                 WHERE (c.domain IS NOT NULL OR c.url IS NOT NULL) AND s.country = %s
-                GROUP BY domain
+                GROUP BY COALESCE(c.domain, 
+                        CASE 
+                            WHEN c.url LIKE 'http%' THEN 
+                                SUBSTRING(c.url FROM 'https?://(?:www\.)?([^/]+)')
+                            ELSE c.url 
+                        END
+                    )
                 ORDER BY count DESC
                 LIMIT 10
             """
@@ -2686,7 +2698,13 @@ def get_comprehensive_dashboard():
                     COUNT(*) as count
                 FROM credentials
                 WHERE domain IS NOT NULL OR url IS NOT NULL
-                GROUP BY domain
+                GROUP BY COALESCE(domain, 
+                        CASE 
+                            WHEN url LIKE 'http%' THEN 
+                                SUBSTRING(url FROM 'https?://(?:www\.)?([^/]+)')
+                            ELSE url 
+                        END
+                    )
                 ORDER BY count DESC
                 LIMIT 10
             """

@@ -122,9 +122,11 @@ EGYPTIAN_BINS = {
     '457338': {'scheme': 'Visa', 'card_type': 'Debit', 'issuer': 'BLOM BANK EGYPT', 'country': 'EG'},
 }
 
-# Global flag to track when new data is added
+# Global flags to track when new data is added
 last_credential_check = datetime.now()
-last_card_check = datetime.now() 
+last_card_check = datetime.now()
+last_watchlist_check = datetime.now()  # For new credential watchlist items
+last_card_watchlist_check = datetime.now()  # For new BIN watchlist items
 watchlist_check_lock = threading.Lock()
 
 def test_connection():
@@ -3175,13 +3177,13 @@ def force_watchlist_check():
 def get_data_change_status():
     """Get status of data changes for automatic watchlist triggering"""
     try:
-        global last_credential_check, last_card_check
+        global last_credential_check, last_card_check, last_watchlist_check, last_card_watchlist_check
         
         # Get tracking data from database
         query = """
             SELECT table_name, last_insert, insert_count 
             FROM data_change_tracker 
-            WHERE table_name IN ('credentials', 'cards', 'system_info')
+            WHERE table_name IN ('credentials', 'cards', 'system_info', 'watchlist', 'card_watchlist')
             ORDER BY table_name
         """
         tracking_data = execute_query(query)
@@ -3196,10 +3198,18 @@ def get_data_change_status():
             'tracking_data': tracking_data or [],
             'last_checks': {
                 'credential_check': last_credential_check.isoformat(),
-                'card_check': last_card_check.isoformat()
+                'card_check': last_card_check.isoformat(),
+                'watchlist_check': last_watchlist_check.isoformat(),
+                'card_watchlist_check': last_card_watchlist_check.isoformat()
             },
             'auto_trigger_enabled': True,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'explanations': {
+                'credential_check': 'Last time we checked for new credential/system matches',
+                'card_check': 'Last time we checked for new card matches',
+                'watchlist_check': 'Last time we checked existing data against new credential watchlist rules',
+                'card_watchlist_check': 'Last time we checked existing data against new BIN watchlist rules'
+            }
         })
         
     except Exception as e:
@@ -3210,7 +3220,7 @@ def get_data_change_status():
 def reset_watchlist_triggers():
     """Reset watchlist trigger timestamps"""
     try:
-        global last_credential_check, last_card_check
+        global last_credential_check, last_card_check, last_watchlist_check, last_card_watchlist_check
         
         # Check authentication (in production, add proper auth)
         auth_header = request.headers.get('Authorization')
@@ -3220,6 +3230,8 @@ def reset_watchlist_triggers():
         # Reset global timestamps
         last_credential_check = datetime.now()
         last_card_check = datetime.now()
+        last_watchlist_check = datetime.now()
+        last_card_watchlist_check = datetime.now()
         
         # Optionally reset database tracking
         data = request.get_json() or {}
@@ -3227,7 +3239,7 @@ def reset_watchlist_triggers():
             reset_query = """
                 UPDATE data_change_tracker 
                 SET last_insert = CURRENT_TIMESTAMP
-                WHERE table_name IN ('credentials', 'cards', 'system_info')
+                WHERE table_name IN ('credentials', 'cards', 'system_info', 'watchlist', 'card_watchlist')
             """
             execute_query(reset_query, fetch=False)
         
@@ -3236,7 +3248,9 @@ def reset_watchlist_triggers():
             'message': 'Watchlist triggers reset successfully',
             'new_timestamps': {
                 'credential_check': last_credential_check.isoformat(),
-                'card_check': last_card_check.isoformat()
+                'card_check': last_card_check.isoformat(),
+                'watchlist_check': last_watchlist_check.isoformat(),
+                'card_watchlist_check': last_card_watchlist_check.isoformat()
             },
             'timestamp': datetime.now().isoformat()
         })
@@ -3350,7 +3364,7 @@ def create_data_triggers():
         """)
         
         # Initialize tracking records for each table
-        tables_to_track = ['credentials', 'cards', 'system_info']
+        tables_to_track = ['credentials', 'cards', 'system_info', 'watchlist', 'card_watchlist']
         for table in tables_to_track:
             cursor.execute("""
                 INSERT INTO data_change_tracker (table_name, last_insert, insert_count)
@@ -3423,6 +3437,48 @@ def create_data_triggers():
                 EXECUTE FUNCTION update_system_tracker();
         """)
         
+        # Create triggers for watchlist table (credential watchlist)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_watchlist_tracker()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP, insert_count = insert_count + 1
+                WHERE table_name = 'watchlist';
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS watchlist_insert_trigger ON watchlist;
+            CREATE TRIGGER watchlist_insert_trigger
+                AFTER INSERT ON watchlist
+                FOR EACH ROW
+                EXECUTE FUNCTION update_watchlist_tracker();
+        """)
+        
+        # Create triggers for card_watchlist table (BIN watchlist)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_card_watchlist_tracker()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE data_change_tracker 
+                SET last_insert = CURRENT_TIMESTAMP, insert_count = insert_count + 1
+                WHERE table_name = 'card_watchlist';
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS card_watchlist_insert_trigger ON card_watchlist;
+            CREATE TRIGGER card_watchlist_insert_trigger
+                AFTER INSERT ON card_watchlist
+                FOR EACH ROW
+                EXECUTE FUNCTION update_card_watchlist_tracker();
+        """)
+        
         conn.commit()
         conn.close()
         
@@ -3434,8 +3490,8 @@ def create_data_triggers():
         return False
 
 def check_for_new_data_and_run_watchlist():
-    """Check if there's new data and run watchlist checks if needed"""
-    global last_credential_check, last_card_check
+    """Check if there's new data or new watchlist rules and run appropriate checks"""
+    global last_credential_check, last_card_check, last_watchlist_check, last_card_watchlist_check
     
     try:
         with watchlist_check_lock:
@@ -3443,7 +3499,7 @@ def check_for_new_data_and_run_watchlist():
             query = """
                 SELECT table_name, last_insert, insert_count 
                 FROM data_change_tracker 
-                WHERE table_name IN ('credentials', 'cards', 'system_info')
+                WHERE table_name IN ('credentials', 'cards', 'system_info', 'watchlist', 'card_watchlist')
             """
             results = execute_query(query)
             
@@ -3453,6 +3509,8 @@ def check_for_new_data_and_run_watchlist():
             
             new_credentials = False
             new_cards = False
+            new_watchlist_rules = False
+            new_card_watchlist_rules = False
             
             for result in results:
                 table_name = result['table_name']
@@ -3468,29 +3526,51 @@ def check_for_new_data_and_run_watchlist():
                     if last_insert > last_card_check:
                         new_cards = True
                         logger.info(f"New cards data detected - last insert: {last_insert}")
+                
+                elif table_name == 'watchlist':
+                    if last_insert > last_watchlist_check:
+                        new_watchlist_rules = True
+                        logger.info(f"New credential watchlist rules detected - last insert: {last_insert}")
+                
+                elif table_name == 'card_watchlist':
+                    if last_insert > last_card_watchlist_check:
+                        new_card_watchlist_rules = True
+                        logger.info(f"New BIN watchlist rules detected - last insert: {last_insert}")
             
             # Run appropriate watchlist checks
-            alerts_created = 0
+            checks_run = 0
             
-            if new_credentials:
-                logger.info("🔄 Running credential watchlist check due to new data...")
+            # Check credentials if new credential data OR new credential watchlist rules
+            if new_credentials or new_watchlist_rules:
+                reason = "new data" if new_credentials else "new watchlist rules"
+                logger.info(f"🔄 Running credential watchlist check due to {reason}...")
                 try:
                     check_watchlist_matches()
-                    last_credential_check = datetime.now()
+                    if new_credentials:
+                        last_credential_check = datetime.now()
+                    if new_watchlist_rules:
+                        last_watchlist_check = datetime.now()
                     logger.info("✓ Credential watchlist check completed")
+                    checks_run += 1
                 except Exception as e:
                     logger.error(f"Error in credential watchlist check: {e}")
             
-            if new_cards:
-                logger.info("🔄 Running card watchlist check due to new data...")
+            # Check cards if new card data OR new BIN watchlist rules
+            if new_cards or new_card_watchlist_rules:
+                reason = "new data" if new_cards else "new BIN watchlist rules"
+                logger.info(f"🔄 Running card watchlist check due to {reason}...")
                 try:
                     check_card_watchlist_matches()
-                    last_card_check = datetime.now()
+                    if new_cards:
+                        last_card_check = datetime.now()
+                    if new_card_watchlist_rules:
+                        last_card_watchlist_check = datetime.now()
                     logger.info("✓ Card watchlist check completed")
+                    checks_run += 1
                 except Exception as e:
                     logger.error(f"Error in card watchlist check: {e}")
             
-            return new_credentials or new_cards
+            return checks_run > 0
             
     except Exception as e:
         logger.error(f"Error checking for new data: {e}")

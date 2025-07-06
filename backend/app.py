@@ -568,9 +568,11 @@ def create_enhanced_credential_alert(watchlist_item, credential_data):
         ])
         
         if not alert_result:
+            logger.error(f"Failed to create basic alert for credential {credential_data['id']}")
             return False
             
         alert_id = alert_result[0]['id']
+        logger.info(f"Created basic alert {alert_id} for credential {credential_data['id']}")
         
         # Get full credential and system details
         detail_query = """
@@ -581,38 +583,151 @@ def create_enhanced_credential_alert(watchlist_item, credential_data):
         """
         detail_result = execute_query(detail_query, [credential_data['id']])
         
-        if detail_result:
-            details = detail_result[0]
+        if not detail_result:
+            logger.warning(f"No details found for credential {credential_data['id']}")
+            return True  # Alert was created, just no details to store
             
-            # Insert into optimization table
-            detail_insert_query = """
-                INSERT INTO credential_alert_details (
-                    alert_id, credential_id, domain, url, username, password,
-                    stealer_type, system_country, system_ip, computer_name,
-                    os_version, machine_user
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            execute_query(detail_insert_query, [
-                alert_id,
-                details['id'],
-                details.get('domain'),
-                details.get('url'),
-                details.get('username'),
-                details.get('password'),
-                details.get('stealer_type'),
-                details.get('country'),
-                details.get('ip'),
-                details.get('computer_name'),
-                details.get('os_version'),
-                details.get('machine_user')
-            ], fetch=False)
-            
-            logger.info(f"Created enhanced credential alert {alert_id} with full details")
+        details = detail_result[0]
+        
+        # Handle IP address conversion safely
+        system_ip = None
+        if details.get('ip'):
+            try:
+                system_ip = str(details['ip'])
+            except Exception as e:
+                logger.warning(f"Could not convert IP address: {e}")
+                system_ip = None
+        
+        # Insert into optimization table with proper error handling
+        detail_insert_query = """
+            INSERT INTO credential_alert_details (
+                alert_id, credential_id, domain, url, username, password,
+                stealer_type, system_country, system_ip, computer_name,
+                os_version, machine_user
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        
+        detail_params = [
+            alert_id,
+            details['id'],
+            details.get('domain'),
+            details.get('url'),
+            details.get('username'),
+            details.get('password'),
+            details.get('stealer_type'),
+            details.get('country'),
+            system_ip,  # Use the safely converted IP
+            details.get('computer_name'),
+            details.get('os_version'),
+            details.get('machine_user')
+        ]
+        
+        detail_insert_result = execute_query(detail_insert_query, detail_params, fetch=False)
+        
+        if detail_insert_result:
+            logger.info(f"Successfully created enhanced credential alert {alert_id} with full details")
             return True
+        else:
+            logger.error(f"Failed to insert details for alert {alert_id}")
+            return True  # Alert exists, just details insertion failed
         
     except Exception as e:
         logger.error(f"Error creating enhanced credential alert: {e}")
         return False
+
+def backfill_credential_alert_details():
+    """Backfill missing credential alert details for existing alerts"""
+    try:
+        logger.info("Starting backfill of credential alert details...")
+        
+        # Find alerts that don't have details in the optimization table
+        missing_details_query = """
+            SELECT a.id as alert_id, a.record_id as credential_id, a.watchlist_id, a.severity
+            FROM alerts a
+            WHERE a.record_type = 'credential' 
+            AND a.id NOT IN (
+                SELECT alert_id FROM credential_alert_details WHERE alert_id IS NOT NULL
+            )
+            ORDER BY a.created_at DESC
+            LIMIT 1000
+        """
+        
+        missing_alerts = execute_query(missing_details_query)
+        
+        if not missing_alerts:
+            logger.info("No alerts missing details found")
+            return 0
+        
+        logger.info(f"Found {len(missing_alerts)} alerts missing details")
+        success_count = 0
+        
+        for alert in missing_alerts:
+            try:
+                # Get full credential and system details
+                detail_query = """
+                    SELECT c.*, s.country, s.ip, s.computer_name, s.os_version, s.machine_user
+                    FROM credentials c
+                    LEFT JOIN system_info s ON c.system_info_id = s.id
+                    WHERE c.id = %s
+                """
+                detail_result = execute_query(detail_query, [alert['credential_id']])
+                
+                if not detail_result:
+                    logger.warning(f"No credential found for alert {alert['alert_id']}")
+                    continue
+                    
+                details = detail_result[0]
+                
+                # Handle IP address conversion safely
+                system_ip = None
+                if details.get('ip'):
+                    try:
+                        system_ip = str(details['ip'])
+                    except Exception as e:
+                        logger.warning(f"Could not convert IP address: {e}")
+                        system_ip = None
+                
+                # Insert into optimization table
+                detail_insert_query = """
+                    INSERT INTO credential_alert_details (
+                        alert_id, credential_id, domain, url, username, password,
+                        stealer_type, system_country, system_ip, computer_name,
+                        os_version, machine_user
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                
+                detail_params = [
+                    alert['alert_id'],
+                    details['id'],
+                    details.get('domain'),
+                    details.get('url'),
+                    details.get('username'),
+                    details.get('password'),
+                    details.get('stealer_type'),
+                    details.get('country'),
+                    system_ip,
+                    details.get('computer_name'),
+                    details.get('os_version'),
+                    details.get('machine_user')
+                ]
+                
+                result = execute_query(detail_insert_query, detail_params, fetch=False)
+                
+                if result:
+                    success_count += 1
+                    if success_count % 10 == 0:
+                        logger.info(f"Backfilled {success_count} alert details so far...")
+                        
+            except Exception as e:
+                logger.error(f"Error backfilling alert {alert['alert_id']}: {e}")
+                continue
+        
+        logger.info(f"Backfill completed. Successfully processed {success_count} alerts")
+        return success_count
+        
+    except Exception as e:
+        logger.error(f"Error in backfill process: {e}")
+        return 0
 
 def check_watchlist_matches():
     """Enhanced watchlist matching with better coverage and optimization table"""
@@ -664,10 +779,11 @@ def check_watchlist_matches():
                 
             elif field_type == 'ip':
                 check_query = """
-                    SELECT id, CAST(ip AS TEXT) as matched_value, domain, username, created_at 
-                    FROM credentials 
-                    WHERE CAST(ip AS TEXT) LIKE %s 
-                    AND id NOT IN (
+                    SELECT c.id, CAST(s.ip AS TEXT) as matched_value, c.domain, c.username, c.created_at 
+                    FROM credentials c
+                    LEFT JOIN system_info s ON c.system_info_id = s.id
+                    WHERE CAST(s.ip AS TEXT) LIKE %s 
+                    AND c.id NOT IN (
                         SELECT record_id FROM alerts 
                         WHERE record_type = 'credential' AND watchlist_id = %s
                     )
@@ -699,6 +815,7 @@ def check_watchlist_matches():
                     try:
                         if create_enhanced_credential_alert(item, match):
                             alerts_created += 1
+                            logger.info(f"Created enhanced alert for credential {match['id']}")
                     except Exception as e:
                         logger.error(f"Error creating enhanced alert for match {match['id']}: {e}")
             else:
@@ -1522,8 +1639,8 @@ def get_optimized_alerts():
             params.append(severity_filter)
         
         if country_filter:
-            where_conditions.append("cad.system_country = %s")
-            params.append(country_filter)
+            where_conditions.append("(cad.system_country = %s OR s.country = %s)")
+            params.extend([country_filter, country_filter])
         
         if date_from:
             where_conditions.append("a.created_at >= %s")
@@ -1537,18 +1654,25 @@ def get_optimized_alerts():
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        # Get total count first
+        # Get total count first - includes alerts with and without details
         count_query = f"""
             SELECT COUNT(*) as total_count
             FROM alerts a
             LEFT JOIN credential_alert_details cad ON a.id = cad.alert_id
+            LEFT JOIN credentials c ON a.record_id = c.id AND a.record_type = 'credential'
+            LEFT JOIN system_info s ON c.system_info_id = s.id
             LEFT JOIN watchlist w ON a.watchlist_id = w.id
-            {where_clause}
+            WHERE a.record_type = 'credential'
         """
+        
+        # Add where clause if exists
+        if where_conditions:
+            count_query += " AND " + " AND ".join(where_conditions)
+        
         count_result = execute_query(count_query, params)
         total_count = count_result[0]['total_count'] if count_result else 0
         
-        # Main optimized query - uses credential_alert_details for fast lookups
+        # Main optimized query - LEFT JOIN to include alerts even without details
         query = f"""
             SELECT 
                 a.id, a.watchlist_id, a.matched_field, a.matched_value,
@@ -1556,24 +1680,67 @@ def get_optimized_alerts():
                 a.reviewed_by, a.reviewed_at, a.created_at,
                 w.keyword, w.description, w.field_type,
                 u.username as reviewed_by_username,
-                cad.domain, cad.url, cad.username as credential_username,
-                cad.stealer_type, cad.system_country, cad.system_ip,
-                cad.computer_name, cad.os_version, cad.machine_user
+                -- Optimized details (if available)
+                cad.domain as opt_domain, 
+                cad.url as opt_url, 
+                cad.username as opt_username,
+                cad.stealer_type as opt_stealer_type, 
+                cad.system_country as opt_country, 
+                cad.system_ip as opt_ip,
+                cad.computer_name as opt_computer_name, 
+                cad.os_version as opt_os_version, 
+                cad.machine_user as opt_machine_user,
+                -- Fallback details (if optimization missing)
+                c.domain as fallback_domain,
+                c.url as fallback_url,
+                c.username as fallback_username,
+                c.stealer_type as fallback_stealer_type,
+                s.country as fallback_country,
+                s.ip as fallback_ip,
+                s.computer_name as fallback_computer_name,
+                s.os_version as fallback_os_version,
+                s.machine_user as fallback_machine_user
             FROM alerts a
             LEFT JOIN credential_alert_details cad ON a.id = cad.alert_id
+            LEFT JOIN credentials c ON a.record_id = c.id AND a.record_type = 'credential'
+            LEFT JOIN system_info s ON c.system_info_id = s.id
             LEFT JOIN watchlist w ON a.watchlist_id = w.id
             LEFT JOIN users u ON a.reviewed_by = u.id
-            {where_clause}
-            ORDER BY a.created_at DESC
-            LIMIT %s OFFSET %s
+            WHERE a.record_type = 'credential'
         """
+        
+        # Add where clause if exists
+        if where_conditions:
+            query += " AND " + " AND ".join(where_conditions)
+            
+        query += " ORDER BY a.created_at DESC LIMIT %s OFFSET %s"
         
         params.extend([per_page, offset])
         result = execute_query(query, params)
         
         if result:
-            # Convert datetime objects to ISO strings
+            # Process results to use optimized data when available, fallback otherwise
             for alert in result:
+                # Use optimized data if available, otherwise fallback to regular data
+                alert['domain'] = alert.get('opt_domain') or alert.get('fallback_domain')
+                alert['url'] = alert.get('opt_url') or alert.get('fallback_url')
+                alert['credential_username'] = alert.get('opt_username') or alert.get('fallback_username')
+                alert['stealer_type'] = alert.get('opt_stealer_type') or alert.get('fallback_stealer_type')
+                alert['system_country'] = alert.get('opt_country') or alert.get('fallback_country')
+                alert['system_ip'] = str(alert.get('opt_ip') or alert.get('fallback_ip') or '')
+                alert['computer_name'] = alert.get('opt_computer_name') or alert.get('fallback_computer_name')
+                alert['os_version'] = alert.get('opt_os_version') or alert.get('fallback_os_version')
+                alert['machine_user'] = alert.get('opt_machine_user') or alert.get('fallback_machine_user')
+                
+                # Add flag to indicate if optimized data was used
+                alert['used_optimized_data'] = bool(alert.get('opt_domain') is not None)
+                
+                # Clean up the temporary fields
+                keys_to_remove = [k for k in alert.keys() if k.startswith('opt_') or k.startswith('fallback_')]
+                for key in keys_to_remove:
+                    del alert[key]
+                
+                # Convert datetime objects to ISO strings
                 for key, value in alert.items():
                     if isinstance(value, datetime):
                         alert[key] = value.isoformat()
@@ -1582,6 +1749,10 @@ def get_optimized_alerts():
         total_pages = (total_count + per_page - 1) // per_page
         has_next = page < total_pages
         has_prev = page > 1
+        
+        # Count how many used optimized vs fallback data
+        optimized_count = sum(1 for alert in result if alert.get('used_optimized_data', False)) if result else 0
+        fallback_count = len(result) - optimized_count if result else 0
         
         return jsonify({
             'results': result if result else [],
@@ -1593,8 +1764,13 @@ def get_optimized_alerts():
                 'has_next': has_next,
                 'has_prev': has_prev
             },
+            'optimization_stats': {
+                'optimized_data_used': optimized_count,
+                'fallback_data_used': fallback_count,
+                'optimization_percentage': round((optimized_count / len(result) * 100) if result else 0, 2)
+            },
             'optimized': True,
-            'note': 'This endpoint uses the credential_alert_details table for enhanced performance'
+            'note': 'Uses credential_alert_details table when available, falls back to live data otherwise'
         })
     except Exception as e:
         logger.error(f"Error getting optimized alerts: {e}")
@@ -2584,13 +2760,208 @@ def export_credentials():
 
 @app.route('/api/health')
 def health_check():
-    """Health check endpoint to verify database connectivity"""
-    conn = get_db_connection()
-    if conn:
+    """Enhanced health check endpoint to verify database connectivity and optimization status"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({
+                'status': 'unhealthy', 
+                'database': 'disconnected',
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        cursor = conn.cursor()
+        
+        # Basic database connectivity test
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        
+        # Check credential alert optimization status
+        optimization_status = {}
+        try:
+            # Get total credential alerts
+            cursor.execute("SELECT COUNT(*) FROM alerts WHERE record_type = 'credential'")
+            total_alerts = cursor.fetchone()[0]
+            
+            # Get alerts with optimization details
+            cursor.execute("""
+                SELECT COUNT(DISTINCT a.id) 
+                FROM alerts a 
+                INNER JOIN credential_alert_details cad ON a.id = cad.alert_id
+                WHERE a.record_type = 'credential'
+            """)
+            alerts_with_details = cursor.fetchone()[0]
+            
+            # Calculate optimization status
+            missing_details = total_alerts - alerts_with_details
+            coverage_percentage = (alerts_with_details / total_alerts * 100) if total_alerts > 0 else 100
+            
+            optimization_status = {
+                'total_credential_alerts': total_alerts,
+                'alerts_with_optimization': alerts_with_details,
+                'alerts_missing_optimization': missing_details,
+                'optimization_coverage_percentage': round(coverage_percentage, 2),
+                'status': 'complete' if missing_details == 0 else 'partial'
+            }
+            
+        except Exception as e:
+            optimization_status = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # Check table existence
+        table_status = {}
+        required_tables = ['alerts', 'credentials', 'cards', 'watchlist', 'card_watchlist', 'credential_alert_details']
+        
+        for table in required_tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = cursor.fetchone()[0]
+                table_status[table] = {'exists': True, 'record_count': count}
+            except:
+                table_status[table] = {'exists': False, 'record_count': 0}
+        
         conn.close()
-        return jsonify({'status': 'healthy', 'database': 'connected'})
-    else:
-        return jsonify({'status': 'unhealthy', 'database': 'disconnected'}), 500
+        
+        # Determine overall health
+        overall_status = 'healthy'
+        if optimization_status.get('status') == 'error':
+            overall_status = 'degraded'
+        elif optimization_status.get('optimization_coverage_percentage', 0) < 50:
+            overall_status = 'degraded'
+        
+        return jsonify({
+            'status': overall_status,
+            'database': 'connected',
+            'optimization': optimization_status,
+            'tables': table_status,
+            'timestamp': datetime.now().isoformat(),
+            'version': '2.0.0',
+            'features': {
+                'credential_alert_optimization': True,
+                'country_filtering': True,
+                'bin_upload': True,
+                'comprehensive_dashboard': True
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return jsonify({
+            'status': 'unhealthy', 
+            'database': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/maintenance/backfill-alerts', methods=['POST'])
+def trigger_backfill_alerts():
+    """Maintenance endpoint to backfill missing credential alert details"""
+    try:
+        logger.info("Manual backfill triggered via API")
+        
+        # Check authentication (in production, add proper auth)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or 'admin' not in auth_header.lower():
+            return jsonify({'error': 'Admin access required'}), 403
+        
+        # Run the backfill process
+        success_count = backfill_credential_alert_details()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Backfill completed successfully',
+            'alerts_processed': success_count,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in backfill endpoint: {e}")
+        return jsonify({'error': 'Failed to run backfill process'}), 500
+
+@app.route('/api/maintenance/alert-details-status')
+def get_alert_details_status():
+    """Get status of credential alert details table"""
+    try:
+        # Get total alerts
+        total_alerts_query = "SELECT COUNT(*) as count FROM alerts WHERE record_type = 'credential'"
+        total_alerts_result = execute_query(total_alerts_query)
+        total_alerts = total_alerts_result[0]['count'] if total_alerts_result else 0
+        
+        # Get alerts with details
+        alerts_with_details_query = """
+            SELECT COUNT(DISTINCT a.id) as count 
+            FROM alerts a 
+            INNER JOIN credential_alert_details cad ON a.id = cad.alert_id
+            WHERE a.record_type = 'credential'
+        """
+        alerts_with_details_result = execute_query(alerts_with_details_query)
+        alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result else 0
+        
+        # Get alerts missing details
+        missing_details = total_alerts - alerts_with_details
+        
+        # Calculate percentage
+        coverage_percentage = (alerts_with_details / total_alerts * 100) if total_alerts > 0 else 0
+        
+        # Get sample of missing alerts
+        missing_sample_query = """
+            SELECT a.id, a.created_at, a.severity, w.keyword 
+            FROM alerts a
+            LEFT JOIN watchlist w ON a.watchlist_id = w.id
+            WHERE a.record_type = 'credential' 
+            AND a.id NOT IN (
+                SELECT alert_id FROM credential_alert_details WHERE alert_id IS NOT NULL
+            )
+            ORDER BY a.created_at DESC
+            LIMIT 5
+        """
+        missing_sample = execute_query(missing_sample_query)
+        
+        # Convert dates to strings
+        if missing_sample:
+            for alert in missing_sample:
+                if alert.get('created_at'):
+                    alert['created_at'] = alert['created_at'].isoformat()
+        
+        return jsonify({
+            'total_credential_alerts': total_alerts,
+            'alerts_with_details': alerts_with_details,
+            'alerts_missing_details': missing_details,
+            'coverage_percentage': round(coverage_percentage, 2),
+            'missing_sample': missing_sample or [],
+            'status': 'complete' if missing_details == 0 else 'incomplete',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting alert details status: {e}")
+        return jsonify({'error': 'Failed to get status'}), 500
+
+@app.route('/api/maintenance/force-watchlist-check', methods=['POST'])
+def force_watchlist_check():
+    """Force a watchlist check to create new alerts"""
+    try:
+        logger.info("Manual watchlist check triggered via API")
+        
+        # Check authentication (in production, add proper auth)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or 'admin' not in auth_header.lower():
+            return jsonify({'error': 'Admin access required'}), 403
+        
+        # Run watchlist matching
+        check_watchlist_matches()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Watchlist check completed',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in force watchlist check: {e}")
+        return jsonify({'error': 'Failed to run watchlist check'}), 500
 
 # Initialize database only once in main process
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
@@ -2603,9 +2974,102 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         if create_missing_tables():
             print("\n✓ Database setup completed successfully!")
             verify_tables()
+            
+            # Auto-populate credential alert details on startup
+            print("\n🔄 Checking credential alert details optimization...")
+            try:
+                # Check status first
+                total_alerts_query = "SELECT COUNT(*) as count FROM alerts WHERE record_type = 'credential'"
+                total_alerts_result = execute_query(total_alerts_query)
+                total_alerts = total_alerts_result[0]['count'] if total_alerts_result else 0
+                
+                alerts_with_details_query = """
+                    SELECT COUNT(DISTINCT a.id) as count 
+                    FROM alerts a 
+                    INNER JOIN credential_alert_details cad ON a.id = cad.alert_id
+                    WHERE a.record_type = 'credential'
+                """
+                alerts_with_details_result = execute_query(alerts_with_details_query)
+                alerts_with_details = alerts_with_details_result[0]['count'] if alerts_with_details_result else 0
+                
+                missing_details = total_alerts - alerts_with_details
+                
+                if missing_details > 0:
+                    print(f"🔄 Found {missing_details} alerts missing optimization details")
+                    print("🔄 Running automatic backfill process...")
+                    
+                    # Run limited backfill on startup (max 100 to not slow down startup)
+                    backfill_query = """
+                        SELECT a.id as alert_id, a.record_id as credential_id, a.watchlist_id, a.severity
+                        FROM alerts a
+                        WHERE a.record_type = 'credential' 
+                        AND a.id NOT IN (
+                            SELECT alert_id FROM credential_alert_details WHERE alert_id IS NOT NULL
+                        )
+                        ORDER BY a.created_at DESC
+                        LIMIT 100
+                    """
+                    
+                    missing_alerts = execute_query(backfill_query)
+                    backfilled_count = 0
+                    
+                    if missing_alerts:
+                        for alert in missing_alerts:
+                            try:
+                                detail_query = """
+                                    SELECT c.*, s.country, s.ip, s.computer_name, s.os_version, s.machine_user
+                                    FROM credentials c
+                                    LEFT JOIN system_info s ON c.system_info_id = s.id
+                                    WHERE c.id = %s
+                                """
+                                detail_result = execute_query(detail_query, [alert['credential_id']])
+                                
+                                if detail_result:
+                                    details = detail_result[0]
+                                    
+                                    # Handle IP address conversion safely
+                                    system_ip = None
+                                    if details.get('ip'):
+                                        try:
+                                            system_ip = str(details['ip'])
+                                        except:
+                                            system_ip = None
+                                    
+                                    detail_insert_query = """
+                                        INSERT INTO credential_alert_details (
+                                            alert_id, credential_id, domain, url, username, password,
+                                            stealer_type, system_country, system_ip, computer_name,
+                                            os_version, machine_user
+                                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    """
+                                    
+                                    result = execute_query(detail_insert_query, [
+                                        alert['alert_id'], details['id'], details.get('domain'),
+                                        details.get('url'), details.get('username'), details.get('password'),
+                                        details.get('stealer_type'), details.get('country'), system_ip,
+                                        details.get('computer_name'), details.get('os_version'), 
+                                        details.get('machine_user')
+                                    ], fetch=False)
+                                    
+                                    if result:
+                                        backfilled_count += 1
+                                        
+                            except Exception as e:
+                                continue
+                    
+                    print(f"✓ Automatically backfilled {backfilled_count} alert details on startup")
+                    if missing_details > 100:
+                        print(f"⚠ {missing_details - 100} alerts still need backfilling (use /api/maintenance/backfill-alerts)")
+                else:
+                    print("✓ All credential alerts have optimization details")
+                    
+            except Exception as e:
+                print(f"⚠ Error during startup backfill: {e}")
         else:
             print("\n✗ Database setup failed!")
-            sys.exit(1)
+        
+    else:
+        print("✗ Database connection failed - please check your configuration")
 
 if __name__ == '__main__':
     print("Starting Flask backend server with PostgreSQL integration...")

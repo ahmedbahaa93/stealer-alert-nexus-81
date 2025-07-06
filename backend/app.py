@@ -2730,7 +2730,9 @@ def get_comprehensive_dashboard():
         return jsonify(response)
         
     except Exception as e:
+        import traceback
         logger.error(f"Error getting comprehensive dashboard: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': 'Failed to fetch comprehensive dashboard data'}), 500
 
 @app.route('/api/export/credentials')
